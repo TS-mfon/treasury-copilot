@@ -1,0 +1,22 @@
+{
+  "name": "treasury-copilot",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "relay:dev": "npm run dev -w apps/relay",
+    "build": "npm run build -w packages/shared && npm run build -w apps/relay && npm run build -w apps/web",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "lint": "npm run lint -ws --if-present",
+    "test:evm": "forge test --root contracts/evm",
+    "lint:genlayer": "genvm-lint check contracts/genlayer/TreasuryPolicy.py"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
+

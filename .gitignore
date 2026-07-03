@@ -1,0 +1,16 @@
+node_modules
+.next
+dist
+out
+cache
+broadcast
+coverage
+.env
+.env.local
+.env.*.local
+*.log
+lcov.info
+*.tsbuildinfo
+.env.build
+__pycache__
+*.pyc
