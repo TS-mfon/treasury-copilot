@@ -1,8 +1,8 @@
 export async function executeApprovedRequest(relayPayload: unknown) {
-  const relayUrl = process.env.NEXT_PUBLIC_RELAY_URL;
-  if (!relayUrl) throw new Error("NEXT_PUBLIC_RELAY_URL is not configured");
+  const relayUrl = process.env.NEXT_PUBLIC_RELAY_URL?.replace(/\/$/, "") ?? "";
+  const endpoint = relayUrl ? `${relayUrl}/execute-approved-request` : "/api/execute-approved-request";
 
-  const response = await fetch(`${relayUrl.replace(/\/$/, "")}/execute-approved-request`, {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(relayPayload),
@@ -17,4 +17,3 @@ export async function executeApprovedRequest(relayPayload: unknown) {
     };
   };
 }
-
