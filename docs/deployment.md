@@ -46,8 +46,14 @@ genlayer network set studionet
 genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args ...
 ```
 
-Current StudioNet policy: redeploy after changing `TreasuryPolicy.py`; update
-`NEXT_PUBLIC_GENLAYER_POLICY` and `ALLOWED_GENLAYER_POLICY_ADDRESSES`.
+Current StudioNet deployments:
+
+- TreasuryPolicy: `0xd6eBacb7a2b7966F2F9AaA332585b5Bf200c447E`
+- TreasuryRegistry: `0x34f908bf178e84DFF085359cB358246f24660C1E`
+
+Redeploy after changing `TreasuryPolicy.py`; update
+`NEXT_PUBLIC_GENLAYER_POLICY`, `NEXT_PUBLIC_GENLAYER_REGISTRY`, and
+`ALLOWED_GENLAYER_POLICY_ADDRESSES`.
 
 ## 1Shot Relay
 
