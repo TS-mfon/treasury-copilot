@@ -13,7 +13,7 @@ import { type TreasuryRequestMessage } from "@treasury-copilot/shared";
 export default function AgentTestPage() {
   const [chainId, setChainId] = useState("84532");
   const [policy, setPolicy] = useState(process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "");
-  const [treasury, setTreasury] = useState(process.env.NEXT_PUBLIC_BASE_SEPOLIA_TREASURY ?? "");
+  const [delegatedAccount, setDelegatedAccount] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("1");
@@ -21,7 +21,7 @@ export default function AgentTestPage() {
   const [justification, setJustification] = useState("");
   const [status, setStatus] = useState("");
 
-  const requestId = useMemo(() => keccak256(stringToHex(`${policy}:${treasury}:${recipient}:${amount}:${category}:${justification}:${Date.now()}`)), [policy, treasury, recipient, amount, category, justification]);
+  const requestId = useMemo(() => keccak256(stringToHex(`${policy}:${delegatedAccount}:${recipient}:${amount}:${category}:${justification}:${Date.now()}`)), [policy, delegatedAccount, recipient, amount, category, justification]);
 
   async function submit() {
     setStatus("Signing EIP-712 request...");
@@ -29,7 +29,7 @@ export default function AgentTestPage() {
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
     const message: TreasuryRequestMessage = {
       policy: policy as Address,
-      treasury: treasury as Address,
+      delegatedAccount: delegatedAccount as Address,
       recipient: recipient as Address,
       amountAtto,
       category,
@@ -69,7 +69,7 @@ export default function AgentTestPage() {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-semibold text-ink">Agent request submitter</h1>
-            <p className="mt-2 max-w-3xl text-slate-600">Signs a real EIP-712 request with the agent key, submits it to GenLayer for policy evaluation, and sends only approved relay payloads to 1Shot.</p>
+            <p className="mt-2 max-w-3xl text-slate-600">Signs a request with the agent key, submits it to GenLayer for policy evaluation, and sends only approved delegation payloads to our 1Shot executor.</p>
           </div>
           <Bot className="text-teal-700" />
         </div>
@@ -78,7 +78,7 @@ export default function AgentTestPage() {
           <div className="grid gap-4 md:grid-cols-3">
             <input className="field" value={chainId} onChange={(event) => setChainId(event.target.value)} placeholder="EVM chain id" />
             <input className="field" value={policy} onChange={(event) => setPolicy(event.target.value)} placeholder="GenLayer policy address" />
-            <input className="field" value={treasury} onChange={(event) => setTreasury(event.target.value)} placeholder="EVM treasury address" />
+            <input className="field" value={delegatedAccount} onChange={(event) => setDelegatedAccount(event.target.value)} placeholder="Delegated account address" />
           </div>
           <input className="field" value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} placeholder="Agent private key, kept in browser memory" type="password" />
           <div className="grid gap-4 md:grid-cols-3">

@@ -1,9 +1,10 @@
 # Deployment Notes
 
-## EVM
+## EVM Legacy Clone Contracts
 
-The Foundry deploy script deploys a fresh `Treasury` implementation and
-`TreasuryFactory`.
+The Foundry deploy script deploys the legacy `Treasury` implementation and
+`TreasuryFactory`. The current primary user flow uses MetaMask delegation from
+the user's wallet/smart account, not manual user funding of a clone.
 
 Current testnet deployments:
 
@@ -45,7 +46,8 @@ genlayer network set studionet
 genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args ...
 ```
 
-Current StudioNet policy: `0x34d830450E1D2CC60383071E94C28C5e62043394`
+Current StudioNet policy: redeploy after changing `TreasuryPolicy.py`; update
+`NEXT_PUBLIC_GENLAYER_POLICY` and `ALLOWED_GENLAYER_POLICY_ADDRESSES`.
 
 ## 1Shot Relay
 

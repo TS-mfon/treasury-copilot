@@ -6,7 +6,7 @@ import { Copy, KeyRound, ShieldCheck, WalletCards } from "lucide-react";
 import { isAddress, type Address } from "viem";
 import { Shell } from "@/components/Shell";
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
-import { parseUsdcAmount, usdcAddressFor } from "@/lib/evm";
+import { parseUsdcAmount } from "@/lib/evm";
 import { generateAgentKey } from "@/lib/agent";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 
@@ -29,7 +29,7 @@ export default function SetupPage() {
   const [status, setStatus] = useState("");
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
-  const token = useMemo(() => usdcAddressFor(chainKey), [chainKey]);
+  const token = selectedChain.usdcAddress;
   const metamaskConnector = connectors.find((connector) => connector.id.toLowerCase().includes("metaMask".toLowerCase())) ?? connectors[0];
   const effectiveAgent = (agent?.address ?? agentAddress) as Address;
 
@@ -47,6 +47,7 @@ export default function SetupPage() {
   async function approveDelegation() {
     if (!address) throw new Error("Connect MetaMask first");
     if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent wallet address");
+    if (!token) throw new Error(`Missing USDC address for ${selectedChain.name}`);
     if (chainId !== selectedChain.chainId) {
       await switchChainAsync({ chainId: selectedChain.chainId });
     }
@@ -174,7 +175,7 @@ export default function SetupPage() {
               authorized_agent: isAddress(effectiveAgent) ? effectiveAgent : "0x...",
               execution_reporter: operatorAddress ?? "operator env missing",
               delegated_account: grant?.delegatedAccount ?? "approve delegation first",
-              token_address: token,
+              token_address: token ?? "USDC env missing",
               delegation_context: grant?.permissionContext ?? "approve delegation first",
               one_shot_method_id: oneShotMethodId,
               evm_chain_id: selectedChain.chainId,

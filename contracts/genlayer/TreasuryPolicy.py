@@ -65,7 +65,7 @@ def _signature_hex(value) -> str:
 
 def _recover_eip712_signer(
     policy_address: str,
-    treasury_address: str,
+    delegated_account: str,
     recipient: str,
     amount_atto: u256,
     category: str,
@@ -90,7 +90,7 @@ def _recover_eip712_signer(
     types = {
         "TreasuryRequest": [
             {"name": "policy", "type": "address"},
-            {"name": "treasury", "type": "address"},
+            {"name": "delegatedAccount", "type": "address"},
             {"name": "recipient", "type": "address"},
             {"name": "amountAtto", "type": "uint256"},
             {"name": "category", "type": "string"},
@@ -101,7 +101,7 @@ def _recover_eip712_signer(
     }
     message = {
         "policy": policy_address,
-        "treasury": treasury_address,
+        "delegatedAccount": delegated_account,
         "recipient": recipient,
         "amountAtto": int(amount_atto),
         "category": category,

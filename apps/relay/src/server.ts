@@ -5,11 +5,14 @@ interface ExecuteBody {
   policy: string;
   method_id: string;
   chain_id: string;
-  treasury?: string;
+  delegated_account?: string;
+  token?: string;
   delegation?: string;
+  permission_context?: string;
   params: {
     requestId: string;
-    treasury?: string;
+    from?: string;
+    token?: string;
     recipient: string;
     amount: string;
   };
@@ -51,7 +54,11 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   if (!body.method_id || typeof body.method_id !== "string") throw new Error("invalid 1Shot method id");
   if (!allowedPolicies.has(body.policy.toLowerCase())) throw new Error("policy not allowed");
   if (!allowedChainIds.has(String(body.chain_id))) throw new Error("chain not allowed");
-  if (body.treasury !== undefined && !isAddress(body.treasury)) throw new Error("invalid treasury address");
+  if (body.delegated_account !== undefined && !isAddress(body.delegated_account)) throw new Error("invalid delegated account");
+  if (body.token !== undefined && !isAddress(body.token)) throw new Error("invalid token address");
+  if (body.permission_context !== undefined && !isHex(body.permission_context, { strict: true })) {
+    throw new Error("invalid permission context");
+  }
   if (body.delegation !== undefined && body.delegation !== "metamask-smart-account-payout") {
     throw new Error("unsupported delegation type");
   }
@@ -59,9 +66,13 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   if (!isHex(body.params.requestId, { strict: true }) || body.params.requestId.length !== 66) {
     throw new Error("invalid request id");
   }
-  if (body.params.treasury !== undefined && !isAddress(body.params.treasury)) throw new Error("invalid params treasury");
-  if (body.treasury && body.params.treasury && body.treasury.toLowerCase() !== body.params.treasury.toLowerCase()) {
-    throw new Error("treasury mismatch");
+  if (body.params.from !== undefined && !isAddress(body.params.from)) throw new Error("invalid params delegated account");
+  if (body.params.token !== undefined && !isAddress(body.params.token)) throw new Error("invalid params token");
+  if (body.delegated_account && body.params.from && body.delegated_account.toLowerCase() !== body.params.from.toLowerCase()) {
+    throw new Error("delegated account mismatch");
+  }
+  if (body.token && body.params.token && body.token.toLowerCase() !== body.params.token.toLowerCase()) {
+    throw new Error("token mismatch");
   }
   if (!isAddress(body.params.recipient)) throw new Error("invalid recipient");
   if (!/^[1-9][0-9]*$/.test(body.params.amount)) throw new Error("invalid amount");
@@ -101,7 +112,14 @@ async function executeOneShot(body: ExecuteBody) {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ params: body.params }),
+    body: JSON.stringify({
+      params: {
+        ...body.params,
+        chain_id: body.chain_id,
+        delegated_account: body.delegated_account,
+        permission_context: body.permission_context,
+      },
+    }),
   });
 
   const data = await response.json().catch(async () => ({ raw: await response.text() })) as Record<string, unknown>;

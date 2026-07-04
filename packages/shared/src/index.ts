@@ -176,7 +176,7 @@ export const erc20Abi = [
 export const treasuryRequestTypes = {
   TreasuryRequest: [
     { name: "policy", type: "address" },
-    { name: "treasury", type: "address" },
+    { name: "delegatedAccount", type: "address" },
     { name: "recipient", type: "address" },
     { name: "amountAtto", type: "uint256" },
     { name: "category", type: "string" },
@@ -188,7 +188,7 @@ export const treasuryRequestTypes = {
 
 export interface TreasuryRequestMessage {
   policy: Address;
-  treasury: Address;
+  delegatedAccount: Address;
   recipient: Address;
   amountAtto: bigint;
   category: string;

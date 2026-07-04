@@ -5,9 +5,9 @@ import { Shell } from "@/components/Shell";
 
 export default function Home() {
   const actors: Array<[string, string, LucideIcon]> = [
-    ["Human owner", "Configures policy, funds a dedicated USDC treasury, and grants payout delegation.", WalletCards],
+    ["Human owner", "Connects MetaMask, delegates a weekly USDC allowance, and sets the agent policy.", WalletCards],
     ["GenLayer policy", "Evaluates every agent request against signer, caps, whitelist, and policy fit.", ShieldCheck],
-    ["Agent wallet", "Signs structured spend requests without holding treasury funds.", Bot],
+    ["Agent wallet", "Requests funds after GenLayer confirms the spend matches the owner's policy.", Bot],
   ];
 
   return (
@@ -23,7 +23,7 @@ export default function Home() {
               Treasury Copilot
             </h1>
             <p className="max-w-2xl text-lg leading-8 text-slate-700">
-              Give one authorized agent bounded spending power without handing over a private key. GenLayer approves or rejects every request, then 1Shot executes approved payouts through the delegated treasury path.
+              Give an agent bounded weekly spending power without handing over a private key. GenLayer reviews every request, then our executor moves only approved funds through the delegated MetaMask path.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">

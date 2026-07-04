@@ -5,7 +5,7 @@ not reuse the existing local frontend or the companion Contract-to-English app.
 
 ## Guarantees
 
-- No database.
+- No database for request history.
 - No mocked balances or seeded request history.
 - All dashboard state is read live from GenLayer or the selected EVM chain.
 - 1Shot credentials stay server-side in the stateless relay.
@@ -15,8 +15,8 @@ not reuse the existing local frontend or the companion Contract-to-English app.
 
 - `apps/web` - Next.js setup wizard, policy editor, dashboard, and agent submitter.
 - `apps/relay` - stateless 1Shot bearer-token and approved-payout execution boundary.
-- `contracts/evm` - Foundry treasury clone contracts and tests.
-- `contracts/genlayer` - GenLayer `TreasuryPolicy.py`.
+- `contracts/evm` - legacy Foundry treasury clone contracts and tests.
+- `contracts/genlayer` - per-user GenLayer `TreasuryPolicy.py` and discovery registry.
 - `packages/shared` - chain config, ABIs, EIP-712 helpers, and shared types.
 
 ## First Build Order
@@ -30,7 +30,9 @@ not reuse the existing local frontend or the companion Contract-to-English app.
 
 ## Request Flow
 
-The agent submits spend requests to GenLayer first. GenLayer checks the
-authorized agent, caps, weekly aggregate, whitelist, and policy text. Approved
-requests return a 1Shot relay payload for the delegated treasury payout path;
-denied requests are stored with reasoning and no funds move.
+The owner connects MetaMask, grants a weekly USDC delegation to an agent, and
+deploys a per-user GenLayer policy with that delegation context. The agent
+submits spend requests to GenLayer first. GenLayer checks the authorized agent,
+caps, weekly aggregate, whitelist, and policy text. Approved requests return a
+1Shot relay payload for our delegated payout executor; denied requests are
+stored with reasoning and no funds move.

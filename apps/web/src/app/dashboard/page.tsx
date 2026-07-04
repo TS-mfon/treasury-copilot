@@ -3,19 +3,12 @@
 import { useState } from "react";
 import { RefreshCcw, Wallet } from "lucide-react";
 import { Shell } from "@/components/Shell";
-import { getExecutionEvents, readTreasuryState } from "@/lib/evm";
 import { getRequest, listRequests, readPolicy } from "@/lib/genlayer";
-import type { Address } from "viem";
-import type { SupportedChainKey } from "@treasury-copilot/shared";
 
 export default function DashboardPage() {
-  const [chainKey, setChainKey] = useState<SupportedChainKey>("baseSepolia");
   const [policy, setPolicy] = useState(process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "");
-  const [treasury, setTreasury] = useState(process.env.NEXT_PUBLIC_BASE_SEPOLIA_TREASURY ?? "");
   const [state, setState] = useState<Record<string, unknown> | null>(null);
-  const [treasuryState, setTreasuryState] = useState<Record<string, unknown> | null>(null);
   const [requests, setRequests] = useState<Record<string, string>[]>([]);
-  const [events, setEvents] = useState<unknown[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -23,17 +16,13 @@ export default function DashboardPage() {
     setLoading(true);
     setError("");
     try {
-      const [policyState, evmState, requestIds, executionEvents] = await Promise.all([
+      const [policyState, requestIds] = await Promise.all([
         readPolicy(policy),
-        readTreasuryState(chainKey, treasury as Address),
         listRequests(policy),
-        getExecutionEvents(chainKey, treasury as Address),
       ]);
       const rows = await Promise.all(requestIds.map((id) => getRequest(policy, id)));
       setState(policyState);
-      setTreasuryState(evmState as unknown as Record<string, unknown>);
       setRequests(rows.reverse());
-      setEvents(executionEvents);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh");
     } finally {
@@ -42,10 +31,10 @@ export default function DashboardPage() {
   }
 
   const metrics: Array<[string, string]> = [
-    ["Treasury USDC", String(treasuryState?.balanceUsdc ?? "-")],
+    ["Delegated account", String(state?.delegated_account ?? "-")],
     ["Weekly spent", state?.weekly_spent_atto ? `${Number(state.weekly_spent_atto) / 1e6} USDC` : "-"],
-    ["Authorized agent", String(treasuryState?.authorizedAgent ?? "-")],
-    ["Relayer gas wei", String(treasuryState?.relayerGas ?? "-")],
+    ["Authorized agent", String(state?.authorized_agent ?? "-")],
+    ["Token", String(state?.token_address ?? "-")],
   ];
 
   return (
@@ -53,20 +42,15 @@ export default function DashboardPage() {
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold text-ink">Live dashboard</h1>
-          <p className="mt-2 text-slate-600">Reads GenLayer and EVM chain state directly. No local request storage.</p>
+          <p className="mt-2 text-slate-600">Reads GenLayer policy and request state directly. No local request storage.</p>
         </div>
         <Wallet className="text-teal-700" />
       </div>
 
       <section className="panel rounded-lg p-5">
-        <div className="grid gap-4 md:grid-cols-[180px_1fr_1fr_auto]">
-          <select className="field" value={chainKey} onChange={(event) => setChainKey(event.target.value as SupportedChainKey)}>
-            <option value="baseSepolia">Base Sepolia</option>
-            <option value="arbitrumSepolia">Arbitrum Sepolia</option>
-          </select>
+        <div className="grid gap-4 md:grid-cols-[1fr_auto]">
           <input className="field" value={policy} onChange={(event) => setPolicy(event.target.value)} placeholder="GenLayer policy address" />
-          <input className="field" value={treasury} onChange={(event) => setTreasury(event.target.value)} placeholder="EVM treasury address" />
-          <button className="inline-flex items-center justify-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!policy || !treasury || loading} onClick={refresh}>
+          <button className="inline-flex items-center justify-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!policy || loading} onClick={refresh}>
             <RefreshCcw size={16} /> Refresh
           </button>
         </div>
@@ -86,7 +70,7 @@ export default function DashboardPage() {
         <div className="panel rounded-lg p-5">
           <h2 className="text-lg font-semibold">Policy</h2>
           <pre className="mt-4 max-h-[480px] overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-950 p-4 text-xs text-slate-100">
-            {state ? JSON.stringify(state, null, 2) : "Enter addresses and refresh."}
+            {state ? JSON.stringify(state, null, 2) : "Enter a policy address and refresh."}
           </pre>
         </div>
         <div className="panel rounded-lg p-5">
@@ -114,12 +98,6 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {events.length > 0 && (
-        <section className="panel mt-6 rounded-lg p-5">
-          <h2 className="text-lg font-semibold">EVM Executed events</h2>
-          <pre className="mt-4 overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">{JSON.stringify(events, null, 2)}</pre>
-        </section>
-      )}
     </Shell>
   );
 }
