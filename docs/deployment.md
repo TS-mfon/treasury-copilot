@@ -53,6 +53,7 @@ Current StudioNet policy: redeploy after changing `TreasuryPolicy.py`; update
 
 The relay is stateless. It requires:
 
+- `AGENT_SIGNER_PRIVATE_KEY` or `TREASURY_OPERATOR_PRIVATE_KEY`
 - `ONE_SHOT_CLIENT_ID`
 - `ONE_SHOT_CLIENT_SECRET`
 - `ONE_SHOT_BASE_URL`

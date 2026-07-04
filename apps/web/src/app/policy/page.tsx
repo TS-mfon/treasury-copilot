@@ -5,6 +5,7 @@ import { Save } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { parseUsdcAmount } from "@/lib/evm";
 import { writePolicyMethod } from "@/lib/genlayer";
+import { friendlyError } from "@/lib/errors";
 
 export default function PolicyPage() {
   const [policyAddress, setPolicyAddress] = useState(process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "");
@@ -15,18 +16,28 @@ export default function PolicyPage() {
   const [threshold, setThreshold] = useState("5");
   const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
   const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   async function save() {
-    setStatus("Submitting policy update to GenLayer...");
-    const result = await writePolicyMethod(policyAddress, "update_policy", [
-      authorizedAgent,
-      executionReporter,
-      parseUsdcAmount(perTxCap).toString(),
-      parseUsdcAmount(weeklyCap).toString(),
-      parseUsdcAmount(threshold).toString(),
-      policyText,
-    ]);
-    setStatus(JSON.stringify(result));
+    setError("");
+    setIsSaving(true);
+    try {
+      setStatus("Submitting policy update to GenLayer...");
+      const result = await writePolicyMethod(policyAddress, "update_policy", [
+        authorizedAgent,
+        executionReporter,
+        parseUsdcAmount(perTxCap).toString(),
+        parseUsdcAmount(weeklyCap).toString(),
+        parseUsdcAmount(threshold).toString(),
+        policyText,
+      ]);
+      setStatus(JSON.stringify(result));
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -46,9 +57,10 @@ export default function PolicyPage() {
             <input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} placeholder="Auto approve USDC" />
           </div>
           <textarea className="field min-h-44" value={policyText} onChange={(event) => setPolicyText(event.target.value)} placeholder="Policy text" />
-          <button className="inline-flex w-fit items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white" onClick={save}>
-            <Save size={16} /> Save policy
+          <button className="inline-flex w-fit items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={isSaving} onClick={save}>
+            <Save size={16} /> {isSaving ? "Saving..." : "Save policy"}
           </button>
+          {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</p>}
           {status && <pre className="overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">{status}</pre>}
         </div>
       </section>

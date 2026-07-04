@@ -4,6 +4,7 @@ import { useState } from "react";
 import { RefreshCcw, Wallet } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { getRequest, listRequests, readPolicy } from "@/lib/genlayer";
+import { friendlyError } from "@/lib/errors";
 
 export default function DashboardPage() {
   const [policy, setPolicy] = useState(process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "");
@@ -24,7 +25,7 @@ export default function DashboardPage() {
       setState(policyState);
       setRequests(rows.reverse());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh");
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }

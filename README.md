@@ -30,9 +30,10 @@ not reuse the existing local frontend or the companion Contract-to-English app.
 
 ## Request Flow
 
-The owner connects MetaMask, grants a weekly USDC delegation to an agent, and
-deploys a per-user GenLayer policy with that delegation context. The agent
-submits spend requests to GenLayer first. GenLayer checks the authorized agent,
-caps, weekly aggregate, whitelist, and policy text. Approved requests return a
-1Shot relay payload for our delegated payout executor; denied requests are
-stored with reasoning and no funds move.
+The owner connects MetaMask, grants a weekly USDC delegation to the platform
+agent signer, and deploys a per-user GenLayer policy with that delegation
+context. Agent payloads are signed by the server-held platform wallet so one
+authorized wallet submits for all configured agents. GenLayer checks every
+request against the signer, caps, weekly aggregate, whitelist, and policy text.
+Approved requests return a 1Shot relay payload for our delegated payout
+executor; denied requests are stored with reasoning and no funds move.

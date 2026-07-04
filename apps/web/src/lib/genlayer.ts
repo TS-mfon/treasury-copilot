@@ -17,7 +17,9 @@ export async function genlayerRpc<T>(request: GenLayerRequest): Promise<T> {
       params: request.params ?? [],
     }),
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => {
+    throw new Error("GenLayer returned an unreadable response");
+  });
   if (data.error) throw new Error(data.error.message ?? JSON.stringify(data.error));
   return data.result as T;
 }
@@ -49,4 +51,3 @@ export async function writePolicyMethod(policyAddress: string, method: string, a
     params: [{ to: policyAddress, method, args }],
   });
 }
-

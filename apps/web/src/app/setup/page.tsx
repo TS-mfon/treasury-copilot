@@ -7,8 +7,8 @@ import { isAddress, type Address } from "viem";
 import { Shell } from "@/components/Shell";
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
 import { parseUsdcAmount } from "@/lib/evm";
-import { generateAgentKey } from "@/lib/agent";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
+import { friendlyError } from "@/lib/errors";
 
 const operatorAddress = process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS as Address | undefined;
 const oneShotMethodId = process.env.NEXT_PUBLIC_ONE_SHOT_METHOD_ID ?? "method_pending_1shot";
@@ -18,20 +18,21 @@ export default function SetupPage() {
   const { connect, connectors, error: connectError, isPending: isConnecting } = useConnect();
   const { switchChainAsync } = useSwitchChain();
   const [chainKey, setChainKey] = useState<SupportedChainKey>("baseSepolia");
-  const [agentAddress, setAgentAddress] = useState("");
+  const [agentAddress, setAgentAddress] = useState(operatorAddress ?? "");
   const [weeklyCap, setWeeklyCap] = useState("100");
   const [perTxCap, setPerTxCap] = useState("25");
   const [threshold, setThreshold] = useState("5");
   const [whitelist, setWhitelist] = useState("");
   const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
-  const [agent, setAgent] = useState<{ privateKey: string; address: Address } | null>(null);
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null>(null);
   const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [isDelegating, setIsDelegating] = useState(false);
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
   const token = selectedChain.usdcAddress;
   const metamaskConnector = connectors.find((connector) => connector.id.toLowerCase().includes("metaMask".toLowerCase())) ?? connectors[0];
-  const effectiveAgent = (agent?.address ?? agentAddress) as Address;
+  const effectiveAgent = agentAddress as Address;
 
   const caps = useMemo(() => ({
     perTxCapAtto: parseUsdcAmount(perTxCap || "0").toString(),
@@ -40,28 +41,41 @@ export default function SetupPage() {
   }), [perTxCap, weeklyCap, threshold]);
 
   async function connectMetaMask() {
-    if (!metamaskConnector) throw new Error("MetaMask connector is not available");
-    await connect({ connector: metamaskConnector, chainId: selectedChain.chainId });
+    setError("");
+    try {
+      if (!metamaskConnector) throw new Error("MetaMask connector is not available");
+      await connect({ connector: metamaskConnector, chainId: selectedChain.chainId });
+    } catch (err) {
+      setError(friendlyError(err));
+    }
   }
 
   async function approveDelegation() {
-    if (!address) throw new Error("Connect MetaMask first");
-    if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent wallet address");
-    if (!token) throw new Error(`Missing USDC address for ${selectedChain.name}`);
-    if (chainId !== selectedChain.chainId) {
-      await switchChainAsync({ chainId: selectedChain.chainId });
-    }
+    setError("");
+    setIsDelegating(true);
+    try {
+      if (!address) throw new Error("Connect MetaMask first");
+      if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent wallet address");
+      if (!token) throw new Error(`Missing USDC address for ${selectedChain.name}`);
+      if (chainId !== selectedChain.chainId) {
+        await switchChainAsync({ chainId: selectedChain.chainId });
+      }
 
-    setStatus("Opening MetaMask permission request for weekly USDC delegation...");
-    const result = await requestWeeklyUsdcDelegation({
-      owner: address,
-      agent: effectiveAgent,
-      chainKey,
-      token,
-      weeklyAllowanceAtto: parseUsdcAmount(weeklyCap || "0"),
-    });
-    setGrant(result);
-    setStatus("Delegation approved. Deploy a GenLayer policy with the constructor args shown below.");
+      setStatus("Opening MetaMask permission request for weekly USDC delegation...");
+      const result = await requestWeeklyUsdcDelegation({
+        owner: address,
+        agent: effectiveAgent,
+        chainKey,
+        token,
+        weeklyAllowanceAtto: parseUsdcAmount(weeklyCap || "0"),
+      });
+      setGrant(result);
+      setStatus("Delegation approved. Deploy a GenLayer policy with the constructor args shown below.");
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setIsDelegating(false);
+    }
   }
 
   return (
@@ -92,6 +106,7 @@ export default function SetupPage() {
               </button>
             )}
             {connectError && <p className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">{connectError.message}</p>}
+            {error && <p className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
           </div>
 
           <h2 className="mt-8 text-lg font-semibold">2. Delegation</h2>
@@ -114,10 +129,10 @@ export default function SetupPage() {
           </div>
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={!isConnected || !isAddress(effectiveAgent)}
+            disabled={!isConnected || !isAddress(effectiveAgent) || isDelegating}
             onClick={approveDelegation}
           >
-            <WalletCards size={16} /> Delegate weekly USDC
+            <WalletCards size={16} /> {isDelegating ? "Delegating..." : "Delegate weekly USDC"}
           </button>
 
           {grant && (
@@ -150,24 +165,20 @@ export default function SetupPage() {
             <textarea className="field min-h-32" value={policyText} onChange={(event) => setPolicyText(event.target.value)} />
           </label>
 
-          <h2 className="mt-8 text-lg font-semibold">4. Agent key helper</h2>
+          <h2 className="mt-8 text-lg font-semibold">4. Platform signer</h2>
           <button
             className="mt-4 inline-flex items-center gap-2 rounded-md border border-slate-900/15 bg-white px-4 py-2 text-sm font-semibold"
             onClick={() => {
-              const generated = generateAgentKey();
-              setAgent(generated);
-              setAgentAddress(generated.address);
+              if (operatorAddress) setAgentAddress(operatorAddress);
             }}
+            disabled={!operatorAddress}
           >
-            <KeyRound size={16} /> Generate agent key
+            <KeyRound size={16} /> Use platform signer
           </button>
-          {agent && (
-            <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm">
-              <p className="font-semibold text-amber-900">Save this private key now. It is not recoverable.</p>
-              <p className="mt-2 break-all">Address: {agent.address}</p>
-              <p className="mt-2 break-all">Private key: {agent.privateKey}</p>
-            </div>
-          )}
+          <div className="mt-4 rounded-md border border-teal-200 bg-teal-50 p-4 text-sm text-teal-950">
+            <p className="font-semibold">This signer is controlled by the dapp backend.</p>
+            <p className="mt-2 break-all">Address: {operatorAddress ?? "NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS is not configured"}</p>
+          </div>
 
           <div className="mt-6 rounded-md bg-slate-950 p-4 text-sm text-slate-100">
             <div className="mb-2 flex items-center gap-2 font-semibold"><Copy size={15} /> GenLayer TreasuryPolicy args</div>

@@ -7,7 +7,7 @@ export async function executeApprovedRequest(relayPayload: unknown) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(relayPayload),
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? "1Shot relay failed");
   return data as {
     tx_hash: string;
