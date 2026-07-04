@@ -210,6 +210,7 @@ class TreasuryPolicy(gl.Contract):
     @gl.public.write
     def record_execution(self, request_id: str, tx_hash: str) -> dict:
         request_id = _hex32(request_id)
+        tx_hash = _hex32(tx_hash)
         if gl.message.sender_address != self.execution_reporter:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only execution reporter")
         self._require_existing_request(request_id)
