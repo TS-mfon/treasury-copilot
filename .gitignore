@@ -14,3 +14,4 @@ lcov.info
 .env.build
 __pycache__
 *.pyc
+.vercel
