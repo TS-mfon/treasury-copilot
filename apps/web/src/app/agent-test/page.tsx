@@ -2,15 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { Bot, Send } from "lucide-react";
-import { keccak256, stringToHex, type Address, type Hex } from "viem";
+import { keccak256, stringToHex } from "viem";
 import { Shell } from "@/components/Shell";
-import { executeApprovedRequest } from "@/lib/relay";
-import { justificationHash } from "@/lib/agent";
-import { parseUsdcAmount } from "@/lib/evm";
-import { writePolicyMethod } from "@/lib/genlayer";
-import { signWithPlatformAgent } from "@/lib/agentSigner";
 import { friendlyError } from "@/lib/errors";
-import { type TreasuryRequestMessage } from "@treasury-copilot/shared";
 
 const submittedPrefix = "treasury-copilot:submitted:";
 
@@ -41,45 +35,16 @@ export default function AgentTestPage() {
         throw new Error("duplicate payload");
       }
 
-      setStatus("Signing request with the platform agent wallet...");
-      const amountAtto = parseUsdcAmount(amount);
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
-      const message: TreasuryRequestMessage = {
-        policy: policy as Address,
-        delegatedAccount: delegatedAccount as Address,
-        recipient: recipient as Address,
-        amountAtto,
-        category,
-        justificationHash: justificationHash(justification),
-        requestId: requestId as Hex,
-        deadline,
-      };
-      const { signature, signer } = await signWithPlatformAgent({ chainId: Number(chainId), policy: policy as Address, message });
-
-      setStatus(`Submitting to GenLayer as ${signer}...`);
-      const result = await writePolicyMethod(policy, "submit_request", [
-        recipient,
-        amountAtto.toString(),
-        category,
-        justification,
-        message.justificationHash,
-        signature,
-        requestId,
-        deadline.toString(),
-      ]);
-
+      setStatus("Submitting to GenLayer. Approved requests execute automatically through 1Shot...");
+      const response = await fetch("/api/submit-agent-request", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chainId: Number(chainId), policy, delegatedAccount, recipient, amount, category, justification }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Request failed");
       window.localStorage.setItem(duplicateKey, new Date().toISOString());
-
-      if (result.verdict !== "approved") {
-        setStatus(JSON.stringify(result, null, 2));
-        return;
-      }
-
-      setStatus("Approved by GenLayer. Executing with 1Shot relay...");
-      const relayResult = await executeApprovedRequest(result.relay);
-      setStatus(`1Shot executed ${relayResult.tx_hash}. Recording execution on GenLayer...`);
-      const record = await writePolicyMethod(policy, relayResult.genlayer_record_execution.method, relayResult.genlayer_record_execution.args);
-      setStatus(JSON.stringify({ genlayer: result, relay: relayResult, record }, null, 2));
+      setStatus(JSON.stringify(result, null, 2));
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -93,7 +58,7 @@ export default function AgentTestPage() {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-semibold text-ink">Agent request submitter</h1>
-            <p className="mt-2 max-w-3xl text-slate-600">Signs a request with the agent key, submits it to GenLayer for policy evaluation, and sends only approved delegation payloads to our 1Shot executor.</p>
+            <p className="mt-2 max-w-3xl text-slate-600">Submits one payload to GenLayer. If GenLayer approves it, the backend immediately forwards the approved relay payload to 1Shot and records the tx hash.</p>
           </div>
           <Bot className="text-teal-700" />
         </div>

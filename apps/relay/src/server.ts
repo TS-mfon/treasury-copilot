@@ -19,7 +19,9 @@ interface ExecuteBody {
 }
 
 const port = Number(process.env.PORT ?? 8787);
-const oneShotBaseUrl = process.env.ONE_SHOT_BASE_URL ?? "https://api.1shotapi.com";
+const oneShotRelayerUrl = process.env.ONE_SHOT_RELAYER_URL
+  ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
+  ?? "https://relayer.1shotapi.dev/relayers";
 const allowedPolicies = csvSet(process.env.ALLOWED_GENLAYER_POLICY_ADDRESSES);
 const allowedChainIds = csvSet(process.env.ALLOWED_EVM_CHAIN_IDS ?? "84532,421614");
 
@@ -79,40 +81,18 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   return body;
 }
 
-async function getBearerToken(): Promise<string> {
-  const clientId = process.env.ONE_SHOT_CLIENT_ID;
-  const clientSecret = process.env.ONE_SHOT_CLIENT_SECRET;
-  if (!clientId || !clientSecret) throw new Error("missing 1Shot credentials");
-
-  const response = await fetch(`${oneShotBaseUrl}/v0/token`, {
+async function executeOneShot(body: ExecuteBody) {
+  const response = await fetch(oneShotRelayerUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`1Shot token failed: ${response.status} ${text.slice(0, 240)}`);
-  }
-
-  const data = await response.json() as { access_token?: string };
-  if (!data.access_token) throw new Error("1Shot token missing access_token");
-  return data.access_token;
-}
-
-async function executeOneShot(body: ExecuteBody) {
-  const token = await getBearerToken();
-  const response = await fetch(`${oneShotBaseUrl}/v0/methods/${encodeURIComponent(body.method_id)}/execute`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
+      policy: body.policy,
+      method_id: body.method_id,
+      chain_id: body.chain_id,
+      delegated_account: body.delegated_account,
+      token: body.token,
+      delegation: body.delegation,
+      permission_context: body.permission_context,
       params: {
         ...body.params,
         chain_id: body.chain_id,
@@ -124,12 +104,12 @@ async function executeOneShot(body: ExecuteBody) {
 
   const data = await response.json().catch(async () => ({ raw: await response.text() })) as Record<string, unknown>;
   if (!response.ok) {
-    throw new Error(`1Shot execute failed: ${response.status} ${JSON.stringify(data).slice(0, 240)}`);
+    throw new Error(`1Shot relayer failed: ${response.status} ${JSON.stringify(data).slice(0, 240)}`);
   }
 
   const txHash = String(data.tx_hash ?? data.txHash ?? data.hash ?? "");
   if (!isHex(txHash, { strict: true })) {
-    throw new Error(`1Shot response missing tx hash: ${JSON.stringify(data).slice(0, 240)}`);
+    throw new Error(`1Shot relayer response missing tx hash: ${JSON.stringify(data).slice(0, 240)}`);
   }
 
   return {

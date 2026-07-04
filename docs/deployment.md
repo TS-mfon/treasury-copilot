@@ -51,13 +51,15 @@ Current StudioNet policy: redeploy after changing `TreasuryPolicy.py`; update
 
 ## 1Shot Relay
 
-The relay is stateless. It requires:
+Use hosted 1Shot relayer URL mode, not client-credential mode. The relay is
+stateless and requires:
 
 - `AGENT_SIGNER_PRIVATE_KEY` or `TREASURY_OPERATOR_PRIVATE_KEY`
-- `ONE_SHOT_CLIENT_ID`
-- `ONE_SHOT_CLIENT_SECRET`
-- `ONE_SHOT_BASE_URL`
+- `GENLAYER_RPC_URL`
+- `NEXT_PUBLIC_ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers`
+- `ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers`
 - `ALLOWED_GENLAYER_POLICY_ADDRESSES`
 - `ALLOWED_EVM_CHAIN_IDS`
 
-It does not store requests or transaction history.
+It does not store requests or transaction history. It validates approved
+GenLayer payloads before forwarding them to the hosted 1Shot relayer.
