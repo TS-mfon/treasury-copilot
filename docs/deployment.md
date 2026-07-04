@@ -45,7 +45,7 @@ genlayer network set studionet
 genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args ...
 ```
 
-Current StudioNet policy: `0xAFd5b16d1ed031F60294C378924267c03De6ccc0`
+Current StudioNet policy: `0x34d830450E1D2CC60383071E94C28C5e62043394`
 
 ## 1Shot Relay
 

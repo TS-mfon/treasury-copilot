@@ -1,45 +1,68 @@
-import { createPublicClient, http, toFunctionSelector, type Address } from "viem";
-import { baseSepolia } from "viem/chains";
-import { createBundlerClient } from "viem/account-abstraction";
-import { Implementation, toMetaMaskSmartAccount, createDelegation, ScopeType } from "@metamask/smart-accounts-kit";
+import { createClient, custom, type Address, type Hex } from "viem";
+import { erc7715ProviderActions, type GetGrantedExecutionPermissionsResult } from "@metamask/smart-accounts-kit/actions";
+import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
 
-export async function buildTreasuryPayoutDelegationDraft(params: {
-  ownerAccount: {
-    address: Address;
-    signMessage: unknown;
-    signTypedData: unknown;
-  };
-  delegate: Address;
-  treasury: Address;
-  maxAmount: bigint;
+export interface TreasuryDelegationGrant {
+  owner: Address;
+  agent: Address;
+  chainId: number;
+  token: Address;
+  weeklyAllowanceAtto: string;
+  permissionContext: Hex;
+  delegationManager: Address;
+  delegatedAccount: Address;
+  raw: GetGrantedExecutionPermissionsResult[number];
+}
+
+export async function requestWeeklyUsdcDelegation(params: {
+  owner: Address;
+  agent: Address;
+  chainKey: SupportedChainKey;
+  token: Address;
+  weeklyAllowanceAtto: bigint;
 }) {
-  const publicClient = createPublicClient({
-    chain: baseSepolia,
-    transport: http(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL),
-  });
-  const bundlerClient = createBundlerClient({
-    client: publicClient,
-    transport: http(process.env.NEXT_PUBLIC_BUNDLER_RPC_URL),
-  });
+  if (!window.ethereum) throw new Error("MetaMask is required");
+  const chain = SUPPORTED_CHAINS[params.chainKey];
+  if (!chain.viemChain) throw new Error("Selected chain is not supported for delegation setup yet");
 
-  const smartAccount = await toMetaMaskSmartAccount({
-    client: publicClient as never,
-    implementation: Implementation.Hybrid,
-    deployParams: [params.ownerAccount.address, [], [], []],
-    deploySalt: "0x",
-    signer: { account: params.ownerAccount as never },
-  });
+  const client = createClient({
+    chain: chain.viemChain,
+    transport: custom(window.ethereum),
+  }).extend(erc7715ProviderActions());
 
-  const delegation = createDelegation({
-    to: params.delegate,
-    from: smartAccount.address,
-    environment: smartAccount.environment,
-    scope: {
-      type: ScopeType.FunctionCall,
-      targets: [params.treasury],
-      selectors: [toFunctionSelector("payout(bytes32,address,uint256)")],
+  const [grant] = await client.requestExecutionPermissions([
+    {
+      chainId: chain.chainId,
+      from: params.owner,
+      to: params.agent,
+      redeemer: [params.agent],
+      payee: [params.agent],
+      permission: {
+        type: "erc20-token-periodic",
+        isAdjustmentAllowed: false,
+        data: {
+          tokenAddress: params.token,
+          periodAmount: params.weeklyAllowanceAtto,
+          periodDuration: 7 * 24 * 60 * 60,
+          justification: "Treasury Copilot weekly agent spending delegation",
+        },
+      },
     },
-  });
+  ]);
 
-  return { publicClient, bundlerClient, smartAccount, delegation };
+  if (!grant?.context || !grant.delegationManager) {
+    throw new Error("MetaMask did not return a usable delegation context");
+  }
+
+  return {
+    owner: params.owner,
+    agent: params.agent,
+    chainId: chain.chainId,
+    token: params.token,
+    weeklyAllowanceAtto: params.weeklyAllowanceAtto.toString(),
+    permissionContext: grant.context,
+    delegationManager: grant.delegationManager,
+    delegatedAccount: (grant.from ?? params.owner) as Address,
+    raw: grant,
+  } satisfies TreasuryDelegationGrant;
 }
