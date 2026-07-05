@@ -26,7 +26,7 @@ function csvSet(value: string | undefined): Set<string> {
 }
 
 function privateKey() {
-  const key = process.env.AGENT_SIGNER_PRIVATE_KEY ?? process.env.TREASURY_OPERATOR_PRIVATE_KEY ?? process.env.PRIVATE_KEY;
+  const key = process.env.AGENT_SIGNER_PRIVATE_KEY;
   if (!key) throw new Error("Platform signer is not configured");
   return key.startsWith("0x") ? key as Hex : `0x${key}` as Hex;
 }

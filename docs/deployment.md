@@ -48,7 +48,7 @@ genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args ...
 
 Current StudioNet deployments:
 
-- TreasuryPolicy: `0xd6eBacb7a2b7966F2F9AaA332585b5Bf200c447E`
+- TreasuryPolicy: `0x39F49354D6064a0603011A7E3c70c45615Da3A3B`
 - TreasuryRegistry: `0x34f908bf178e84DFF085359cB358246f24660C1E`
 
 Redeploy after changing `TreasuryPolicy.py`; update
@@ -60,7 +60,7 @@ Redeploy after changing `TreasuryPolicy.py`; update
 Use hosted 1Shot relayer URL mode, not client-credential mode. The relay is
 stateless and requires:
 
-- `AGENT_SIGNER_PRIVATE_KEY` or `TREASURY_OPERATOR_PRIVATE_KEY`
+- `AGENT_SIGNER_PRIVATE_KEY`
 - `GENLAYER_RPC_URL`
 - `NEXT_PUBLIC_ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers`
 - `ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers`
@@ -69,3 +69,7 @@ stateless and requires:
 
 It does not store requests or transaction history. It validates approved
 GenLayer payloads before forwarding them to the hosted 1Shot relayer.
+
+The platform signer address currently used by the frontend and GenLayer policy
+is `0x1072e78B72840BbC921493ea1C97dC5CAA54598F`. Do not use the deployer private
+key as the platform signer.

@@ -191,7 +191,19 @@ class TreasuryPolicy(gl.Contract):
         justification_hash = _hex32(justification_hash)
         signature = _signature_hex(signature)
         self._require_new_request(request_id)
-        if gl.message.sender_address != self.authorized_agent:
+        signer = _recover_eip712_signer(
+            str(gl.message.contract_address),
+            self.delegated_account,
+            recipient,
+            amount_atto,
+            category,
+            justification_hash,
+            request_id,
+            deadline,
+            signature,
+            self.evm_chain_id,
+        )
+        if signer != _lower(str(self.authorized_agent)):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Unauthorized signer")
 
         self._maybe_reset_weekly_window()
@@ -217,8 +229,6 @@ class TreasuryPolicy(gl.Contract):
     def record_execution(self, request_id: str, tx_hash: str) -> dict:
         request_id = _hex32(request_id)
         tx_hash = _hex32(tx_hash)
-        if gl.message.sender_address != self.execution_reporter:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only execution reporter")
         self._require_existing_request(request_id)
         req = self.requests[request_id]
         if req.verdict != VERDICT_APPROVED:

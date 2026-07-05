@@ -84,7 +84,7 @@ export default function SetupPage() {
         <div>
           <h1 className="text-3xl font-semibold text-ink">Setup</h1>
           <p className="mt-2 max-w-3xl text-slate-600">
-            Connect MetaMask, delegate a weekly USDC budget to your agent, then bind that delegation to a GenLayer policy contract.
+            Connect MetaMask, delegate a weekly USDC budget to Treasury Copilot's platform signer, then bind that delegation to a GenLayer policy contract.
           </p>
         </div>
         <ShieldCheck className="mt-1 text-teal-700" />
@@ -119,7 +119,7 @@ export default function SetupPage() {
               </select>
             </label>
             <label className="grid gap-2 text-sm font-medium">
-              Agent wallet
+              Platform signer wallet
               <input className="field" value={agentAddress} onChange={(event) => setAgentAddress(event.target.value)} placeholder="0x..." />
             </label>
             <label className="grid gap-2 text-sm font-medium">
@@ -176,7 +176,7 @@ export default function SetupPage() {
             <KeyRound size={16} /> Use platform signer
           </button>
           <div className="mt-4 rounded-md border border-teal-200 bg-teal-50 p-4 text-sm text-teal-950">
-            <p className="font-semibold">This signer is controlled by the dapp backend.</p>
+              <p className="font-semibold">This wallet signs agent requests and redeems the MetaMask delegation.</p>
             <p className="mt-2 break-all">Address: {operatorAddress ?? "NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS is not configured"}</p>
           </div>
 
