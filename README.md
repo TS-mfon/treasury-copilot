@@ -52,3 +52,15 @@ ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
 The backend still validates policy, chain, delegated account, token, permission
 context, recipient, amount, and request id before forwarding approved GenLayer
 payloads to 1Shot.
+
+The hosted relayer path does not use an app-specific method id. Approved
+requests execute through the 1Shot JSON-RPC methods:
+
+- `relayer_getCapabilities`
+- `relayer_getFeeData`
+- `relayer_estimate7710Transaction`
+- `relayer_send7710Transaction`
+- `relayer_getStatus`
+
+The backend redelegates the stored MetaMask permission context from the platform
+signer to the current 1Shot relayer target before submitting the ERC-7710 bundle.

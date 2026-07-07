@@ -3,7 +3,7 @@ import { isAddress, isHex } from "viem";
 
 interface ExecuteBody {
   policy: string;
-  method_id: string;
+  method_id?: string;
   chain_id: string;
   delegated_account?: string;
   token?: string;
@@ -53,7 +53,7 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   const body = value as ExecuteBody;
   if (!body || typeof body !== "object") throw new Error("invalid body");
   if (!isAddress(body.policy)) throw new Error("invalid policy address");
-  if (!body.method_id || typeof body.method_id !== "string") throw new Error("invalid 1Shot method id");
+  if (body.method_id !== undefined && typeof body.method_id !== "string") throw new Error("invalid 1Shot method id");
   if (!allowedPolicies.has(body.policy.toLowerCase())) throw new Error("policy not allowed");
   if (!allowedChainIds.has(String(body.chain_id))) throw new Error("chain not allowed");
   if (body.delegated_account !== undefined && !isAddress(body.delegated_account)) throw new Error("invalid delegated account");
@@ -87,7 +87,7 @@ async function executeOneShot(body: ExecuteBody) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       policy: body.policy,
-      method_id: body.method_id,
+      ...(body.method_id ? { method_id: body.method_id } : {}),
       chain_id: body.chain_id,
       delegated_account: body.delegated_account,
       token: body.token,

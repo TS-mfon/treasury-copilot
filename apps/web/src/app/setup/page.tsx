@@ -11,7 +11,6 @@ import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib
 import { friendlyError } from "@/lib/errors";
 
 const operatorAddress = process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS as Address | undefined;
-const oneShotMethodId = process.env.NEXT_PUBLIC_ONE_SHOT_METHOD_ID ?? "method_pending_1shot";
 const defaultPolicy = process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "";
 
 function jsonWithBigInt(value: unknown) {
@@ -250,7 +249,8 @@ export default function SetupPage() {
               delegated_account: grant?.delegatedAccount ?? "approve delegation first",
               token_address: token ?? "USDC env missing",
               delegation_context: grant?.permissionContext ?? "approve delegation first",
-              one_shot_method_id: oneShotMethodId,
+              one_shot_relay_mode: "hosted-erc7710-json-rpc",
+              one_shot_methods: ["relayer_getCapabilities", "relayer_getFeeData", "relayer_estimate7710Transaction", "relayer_send7710Transaction", "relayer_getStatus"],
               evm_chain_id: selectedChain.chainId,
               ...caps,
               policy_text: policyText,

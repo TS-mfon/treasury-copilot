@@ -35,8 +35,6 @@ export async function requestWeeklyUsdcDelegation(params: {
       chainId: chain.chainId,
       from: params.owner,
       to: params.agent,
-      redeemer: [params.agent],
-      payee: [params.agent],
       permission: {
         type: "erc20-token-periodic",
         isAdjustmentAllowed: false,

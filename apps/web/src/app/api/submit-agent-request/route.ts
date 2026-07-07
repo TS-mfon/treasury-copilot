@@ -106,7 +106,6 @@ export async function POST(request: Request) {
     const policyState = await genlayerRead<Record<string, unknown>>(body.policy, "get_policy");
     const relay = {
       policy: body.policy,
-      method_id: String(policyState.one_shot_method_id ?? ""),
       chain_id: String(policyState.evm_chain_id ?? body.chainId),
       delegated_account: String(policyState.delegated_account ?? body.delegatedAccount),
       token: String(policyState.token_address ?? ""),

@@ -1,11 +1,15 @@
 import { decodeDelegations } from "@metamask/delegation-core";
-import { encodeFunctionData, isAddress, isHex, numberToHex, parseAbi, type Address, type Hex } from "viem";
+import { getSmartAccountsEnvironment } from "@metamask/smart-accounts-kit";
+import { redelegatePermissionContextAction } from "@metamask/smart-accounts-kit/actions";
+import { createWalletClient, encodeFunctionData, http, isAddress, isHex, numberToHex, parseAbi, type Address, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { arbitrumSepolia, baseSepolia } from "viem/chains";
 
 const erc20Abi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 
 export interface OneShotRelayRequest {
   policy: Address;
-  method_id: string;
+  method_id?: string;
   chain_id: string;
   delegated_account?: Address;
   token?: Address;
@@ -34,6 +38,18 @@ function oneShotRpcUrl() {
     ?? "https://relayer.1shotapi.dev/relayers";
 }
 
+function platformPrivateKey() {
+  const key = process.env.AGENT_SIGNER_PRIVATE_KEY;
+  if (!key) throw new Error("Platform signer is not configured");
+  return key.startsWith("0x") ? key as Hex : `0x${key}` as Hex;
+}
+
+function viemChain(chainId: string) {
+  if (chainId === String(baseSepolia.id)) return baseSepolia;
+  if (chainId === String(arbitrumSepolia.id)) return arbitrumSepolia;
+  throw new Error(`unsupported delegated execution chain ${chainId}`);
+}
+
 async function rpcCall<T>(method: string, params: unknown): Promise<T> {
   const response = await fetch(oneShotRpcUrl(), {
     method: "POST",
@@ -50,6 +66,10 @@ async function rpcCall<T>(method: string, params: unknown): Promise<T> {
   return data.result as T;
 }
 
+async function getCapabilities(chainId: string) {
+  return await rpcCall<Record<string, unknown>>("relayer_getCapabilities", [chainId]);
+}
+
 function formatDelegationChain(delegationPayload: unknown): unknown[] {
   if (typeof delegationPayload === "string") {
     try {
@@ -59,6 +79,16 @@ function formatDelegationChain(delegationPayload: unknown): unknown[] {
     }
   }
   const values = Array.isArray(delegationPayload) ? delegationPayload : [delegationPayload];
+  const firstContext = (values[0] as Record<string, unknown> | undefined)?.context
+    ?? (values[0] as Record<string, unknown> | undefined)?.permissionContext;
+  if (typeof firstContext === "string" && isHex(firstContext, { strict: true })) {
+    try {
+      const decoded = decodeDelegations(firstContext);
+      if (decoded.length > 0) return decoded.map(formatDelegation);
+    } catch {
+      // Fall through to per-item formatting below.
+    }
+  }
   const decoded: unknown[] = [];
 
   for (const item of values) {
@@ -75,23 +105,25 @@ function formatDelegationChain(delegationPayload: unknown): unknown[] {
     decoded.push(item);
   }
 
-  return decoded.map((item) => {
-    const record = item as Record<string, unknown>;
-    let salt = record.salt;
-    if (typeof salt === "bigint") salt = numberToHex(salt, { size: 32 });
-    if (typeof salt === "string" && /^[0-9]+$/.test(salt)) salt = numberToHex(BigInt(salt), { size: 32 });
-    if (!salt) salt = "0x0000000000000000000000000000000000000000000000000000000000000000";
+  return decoded.map(formatDelegation);
+}
 
-    return {
-      ...record,
-      delegate: record.delegate ?? record.to ?? "",
-      delegator: record.delegator ?? record.from ?? "",
-      authority: record.authority ?? "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      caveats: record.caveats ?? [],
-      salt,
-      signature: record.signature ?? "",
-    };
-  });
+function formatDelegation(item: unknown) {
+  const record = item as Record<string, unknown>;
+  let salt = record.salt;
+  if (typeof salt === "bigint") salt = numberToHex(salt, { size: 32 });
+  if (typeof salt === "string" && /^[0-9]+$/.test(salt)) salt = numberToHex(BigInt(salt), { size: 32 });
+  if (!salt) salt = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+  return {
+    ...record,
+    delegate: record.delegate ?? record.to ?? "",
+    delegator: record.delegator ?? record.from ?? "",
+    authority: record.authority ?? "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    caveats: record.caveats ?? [],
+    salt,
+    signature: record.signature ?? "",
+  };
 }
 
 function encodeErc20Transfer(recipient: Address, amount: bigint) {
@@ -140,14 +172,47 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
   const delegatedAccount = body.delegated_account ?? body.params.from;
   if (!delegatedAccount || !isAddress(delegatedAccount)) throw new Error("missing delegated account for 7710 execution");
 
-  const feeData = await rpcCall<{ feeCollector?: Address; targetAddress?: Address }>("relayer_getFeeData", {
-    chainId: body.chain_id,
-    token: body.token,
-  });
+  const [capabilities, feeData] = await Promise.all([
+    getCapabilities(body.chain_id).catch(() => ({} as Record<string, unknown>)),
+    rpcCall<{ feeCollector?: Address; targetAddress?: Address }>("relayer_getFeeData", {
+      chainId: body.chain_id,
+      token: body.token,
+    }),
+  ]);
+  const relayerTarget = feeData.targetAddress
+    ?? (capabilities.targetAddress as Address | undefined)
+    ?? (capabilities.relayerTargetAddress as Address | undefined);
+  if (!relayerTarget || !isAddress(relayerTarget)) throw new Error("1Shot capabilities missing relayer target address");
   const feeCollector = feeData.feeCollector;
   if (!feeCollector || !isAddress(feeCollector)) throw new Error("1Shot fee data missing fee collector");
 
-  const delegationChain = formatDelegationChain(body.delegation_payload);
+  const account = privateKeyToAccount(platformPrivateKey());
+  const walletClient = createWalletClient({
+    account,
+    chain: viemChain(body.chain_id),
+    transport: http(),
+  });
+  const environment = getSmartAccountsEnvironment(Number(body.chain_id));
+  const parentDelegation = Array.isArray(body.delegation_payload)
+    ? body.delegation_payload[0] as Record<string, unknown>
+    : body.delegation_payload as Record<string, unknown>;
+  const parentContext = body.permission_context
+    ?? (typeof parentDelegation?.context === "string" ? parentDelegation.context as Hex : undefined)
+    ?? (typeof parentDelegation?.permissionContext === "string" ? parentDelegation.permissionContext as Hex : undefined);
+  if (!parentContext || !isHex(parentContext, { strict: true })) throw new Error("missing valid parent permission context for 1Shot redelegation");
+  const redelegateResult = await redelegatePermissionContextAction(walletClient, {
+    account,
+    permissionContext: parentContext,
+    to: relayerTarget,
+    environment,
+    chainId: Number(body.chain_id),
+  });
+  const redelegatedObj = {
+    ...(redelegateResult.delegation as Record<string, unknown>),
+    context: redelegateResult.permissionContext,
+  };
+
+  const delegationChain = formatDelegationChain([redelegatedObj]);
   const workTx = {
     to: body.token,
     data: encodeErc20Transfer(body.params.recipient, BigInt(body.params.amount)),
@@ -159,15 +224,19 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
     value: "0x0",
   };
 
-  const estimatePayload = {
+  const buildPayload = (executions: typeof workTx[]) => ({
     chainId: body.chain_id,
     transactions: [{
       permissionContext: delegationChain,
-      executions: [dummyFeeTx, workTx].map((tx) => ({ target: tx.to, value: tx.value, data: tx.data })),
+      executions: executions.map((tx) => ({ target: tx.to, value: tx.value, data: tx.data })),
     }],
     authorizationList: [],
-  };
-  const initialEstimate = await rpcCall<{ requiredPaymentAmount?: string }>("relayer_estimate7710Transaction", estimatePayload);
+  });
+
+  const initialEstimate = await rpcCall<{ requiredPaymentAmount?: string }>(
+    "relayer_estimate7710Transaction",
+    buildPayload([dummyFeeTx, workTx]),
+  );
   if (!initialEstimate.requiredPaymentAmount) throw new Error("1Shot estimate missing required payment amount");
 
   const feeTx = {
@@ -175,14 +244,7 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
     data: encodeErc20Transfer(feeCollector, BigInt(initialEstimate.requiredPaymentAmount)),
     value: "0x0",
   };
-  const finalPayload = {
-    chainId: body.chain_id,
-    transactions: [{
-      permissionContext: delegationChain,
-      executions: [feeTx, workTx].map((tx) => ({ target: tx.to, value: tx.value, data: tx.data })),
-    }],
-    authorizationList: [],
-  };
+  const finalPayload = buildPayload([feeTx, workTx]);
   const finalEstimate = await rpcCall<{ context?: string }>("relayer_estimate7710Transaction", finalPayload);
   if (!finalEstimate.context) throw new Error("1Shot final estimate missing context");
 
@@ -193,7 +255,7 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
   const taskId = typeof sendResult === "string" ? sendResult : (sendResult.taskId ?? sendResult.result ?? sendResult.id);
   if (!taskId) throw new Error(`1Shot send response missing task id: ${JSON.stringify(sendResult).slice(0, 240)}`);
   const txHash = await pollStatus(taskId);
-  return { tx_hash: txHash, raw: sendResult, mode: "erc7710", task_id: taskId };
+  return { tx_hash: txHash, raw: { taskId, relayerTarget, feeCollector, sendResult }, mode: "erc7710", task_id: taskId };
 }
 
 export async function executeOneShot(body: OneShotRelayRequest): Promise<OneShotExecutionResult> {

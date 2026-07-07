@@ -67,8 +67,16 @@ stateless and requires:
 - `ALLOWED_GENLAYER_POLICY_ADDRESSES`
 - `ALLOWED_EVM_CHAIN_IDS`
 
-It does not store requests or transaction history. It validates approved
-GenLayer payloads before forwarding them to the hosted 1Shot relayer.
+It does not require `ONE_SHOT_CLIENT_ID`, `ONE_SHOT_CLIENT_SECRET`, or a
+`NEXT_PUBLIC_ONE_SHOT_METHOD_ID`. Hosted mode uses the 1Shot JSON-RPC methods
+`relayer_getCapabilities`, `relayer_getFeeData`,
+`relayer_estimate7710Transaction`, `relayer_send7710Transaction`, and
+`relayer_getStatus`.
+
+The web backend validates approved GenLayer payloads, redelegates the stored
+MetaMask permission context from the platform signer to the current 1Shot
+relayer target address, estimates the USDC fee, sends the ERC-7710 bundle, polls
+for confirmation, and records the resulting tx hash on GenLayer.
 
 The platform signer address currently used by the frontend and GenLayer policy
 is `0x1072e78B72840BbC921493ea1C97dC5CAA54598F`. Do not use the deployer private
