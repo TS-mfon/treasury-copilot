@@ -1,4 +1,5 @@
 import { isAddress, isHex } from "viem";
+import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
 
 export const runtime = "nodejs";
 
@@ -10,6 +11,7 @@ interface ExecuteBody {
   token?: string;
   delegation?: string;
   permission_context?: string;
+  delegation_payload?: unknown;
   params: {
     requestId: string;
     from?: string;
@@ -19,9 +21,6 @@ interface ExecuteBody {
   };
 }
 
-const oneShotRelayerUrl = process.env.ONE_SHOT_RELAYER_URL
-  ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
-  ?? "https://relayer.1shotapi.dev/relayers";
 const allowedPolicies = csvSet(process.env.ALLOWED_GENLAYER_POLICY_ADDRESSES ?? process.env.NEXT_PUBLIC_GENLAYER_POLICY);
 const allowedChainIds = csvSet(process.env.ALLOWED_EVM_CHAIN_IDS ?? "84532,421614");
 
@@ -40,6 +39,9 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   if (body.token !== undefined && !isAddress(body.token)) throw new Error("invalid token address");
   if (body.permission_context !== undefined && !isHex(body.permission_context, { strict: true })) {
     throw new Error("invalid permission context");
+  }
+  if (body.delegation_payload !== undefined && typeof body.delegation_payload !== "object" && typeof body.delegation_payload !== "string") {
+    throw new Error("invalid delegation payload");
   }
   if (body.delegation !== undefined && body.delegation !== "metamask-smart-account-payout") {
     throw new Error("unsupported delegation type");
@@ -61,51 +63,17 @@ function assertExecuteBody(value: unknown): ExecuteBody {
   return body;
 }
 
-async function executeOneShot(body: ExecuteBody) {
-  const response = await fetch(oneShotRelayerUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      policy: body.policy,
-      method_id: body.method_id,
-      chain_id: body.chain_id,
-      delegated_account: body.delegated_account,
-      token: body.token,
-      delegation: body.delegation,
-      permission_context: body.permission_context,
-      params: {
-        ...body.params,
-        chain_id: body.chain_id,
-        delegated_account: body.delegated_account,
-        permission_context: body.permission_context,
-      },
-    }),
-  });
-
-  const data = await response.json().catch(async () => ({ raw: await response.text() })) as Record<string, unknown>;
-  if (!response.ok) {
-    throw new Error(`1Shot relayer failed: ${response.status} ${JSON.stringify(data).slice(0, 240)}`);
-  }
-
-  const txHash = String(data.tx_hash ?? data.txHash ?? data.hash ?? "");
-  if (!isHex(txHash, { strict: true })) {
-    throw new Error(`1Shot relayer response missing tx hash: ${JSON.stringify(data).slice(0, 240)}`);
-  }
-
-  return {
-    tx_hash: txHash,
-    raw: data,
-    genlayer_record_execution: {
-      method: "record_execution",
-      args: [body.params.requestId, txHash],
-    },
-  };
-}
-
 export async function POST(request: Request) {
   try {
     const body = assertExecuteBody(await request.json());
-    return Response.json(await executeOneShot(body));
+    const result = await executeOneShot(body as OneShotRelayRequest);
+    return Response.json({
+      ...result,
+      genlayer_record_execution: {
+        method: "record_execution",
+        args: [body.params.requestId, result.tx_hash],
+      },
+    });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "unknown error" }, { status: 400 });
   }

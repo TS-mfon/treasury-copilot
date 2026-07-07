@@ -124,6 +124,7 @@ class TreasuryPolicy(gl.Contract):
     delegated_account: str
     token_address: str
     delegation_context: str
+    delegation_payload: str
     one_shot_method_id: str
     evm_chain_id: u256
     per_tx_cap_atto: u256
@@ -158,6 +159,7 @@ class TreasuryPolicy(gl.Contract):
         self.delegated_account = str(delegated_account)
         self.token_address = str(token_address)
         self.delegation_context = str(delegation_context)
+        self.delegation_payload = ""
         self.one_shot_method_id = one_shot_method_id
         self.evm_chain_id = evm_chain_id
         self.per_tx_cap_atto = per_tx_cap_atto
@@ -273,6 +275,17 @@ class TreasuryPolicy(gl.Contract):
         self.whitelist_enabled = enabled
         return {"enabled": enabled}
 
+    @gl.public.write
+    def register_delegation(self, delegation_payload: str, delegated_account: Address, token_address: Address, delegation_context: str) -> dict:
+        self._require_owner_or_authorized_agent()
+        if str(delegation_payload).strip() == "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Empty delegation payload")
+        self.delegation_payload = delegation_payload
+        self.delegated_account = str(delegated_account)
+        self.token_address = str(token_address)
+        self.delegation_context = str(delegation_context)
+        return self.get_policy()
+
     @gl.public.view
     def get_policy(self) -> dict:
         return {
@@ -282,6 +295,8 @@ class TreasuryPolicy(gl.Contract):
             "delegated_account": self.delegated_account,
             "token_address": self.token_address,
             "delegation_context": self.delegation_context,
+            "delegation_registered": self.delegation_payload != "",
+            "delegation_payload": self.delegation_payload,
             "one_shot_method_id": self.one_shot_method_id,
             "evm_chain_id": str(self.evm_chain_id),
             "per_tx_cap_atto": str(self.per_tx_cap_atto),
@@ -369,6 +384,7 @@ Return JSON only:
                 "token": self.token_address,
                 "delegation": "metamask-smart-account-payout",
                 "permission_context": self.delegation_context,
+                "delegation_payload": self.delegation_payload,
                 "params": {
                     "requestId": request_id,
                     "from": self.delegated_account,
@@ -419,6 +435,10 @@ Return JSON only:
     def _require_owner(self) -> None:
         if gl.message.sender_address != self.owner:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner")
+
+    def _require_owner_or_authorized_agent(self) -> None:
+        if gl.message.sender_address != self.owner and gl.message.sender_address != self.authorized_agent:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner or authorized agent")
 
     def _require_new_request(self, request_id: str) -> None:
         try:

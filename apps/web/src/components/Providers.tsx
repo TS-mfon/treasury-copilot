@@ -8,7 +8,13 @@ import { useState } from "react";
 
 const config = createConfig({
   chains: [baseSepolia, arbitrumSepolia],
-  connectors: [injected({ target: "metaMask" })],
+  connectors: [
+    injected({
+      shimDisconnect: true,
+      unstable_shimAsyncInject: 1_000,
+    }),
+  ],
+  multiInjectedProviderDiscovery: true,
   transports: {
     [baseSepolia.id]: http(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL),
     [arbitrumSepolia.id]: http(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL),
@@ -23,4 +29,3 @@ export function Providers({ children }: { children: React.ReactNode }) {
     </WagmiProvider>
   );
 }
-

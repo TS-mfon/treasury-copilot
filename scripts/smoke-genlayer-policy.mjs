@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { keccak256, stringToHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-const policy = process.env.GENLAYER_POLICY ?? "0x39F49354D6064a0603011A7E3c70c45615Da3A3B";
+const policy = process.env.GENLAYER_POLICY ?? "0xaC8727AA788B19e4344Ee8721d9E249B542022c8";
 const delegatedAccount = process.env.DELEGATED_ACCOUNT ?? "0xEd9EDd8586b20524CafA4F568413C504C9B03172";
 const recipient = process.env.RECIPIENT ?? "0x1072e78B72840BbC921493ea1C97dC5CAA54598F";
 const chainId = Number(process.env.EVM_CHAIN_ID ?? "84532");

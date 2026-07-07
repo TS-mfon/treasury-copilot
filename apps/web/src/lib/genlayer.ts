@@ -31,6 +31,33 @@ export async function readPolicy(policyAddress: string) {
   });
 }
 
+export async function registryPoliciesForOwner(owner: string) {
+  const registry = process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
+  if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
+  return genlayerRpc<string[]>({
+    method: "gen_call",
+    params: [{ to: registry, method: "policies_for_owner", args: [owner] }],
+  });
+}
+
+export async function registryPoliciesForAgent(agent: string) {
+  const registry = process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
+  if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
+  return genlayerRpc<string[]>({
+    method: "gen_call",
+    params: [{ to: registry, method: "policies_for_agent", args: [agent] }],
+  });
+}
+
+export async function registryGetPolicy(policyAddress: string) {
+  const registry = process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
+  if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
+  return genlayerRpc<Record<string, string>>({
+    method: "gen_call",
+    params: [{ to: registry, method: "get_policy", args: [policyAddress] }],
+  });
+}
+
 export async function listRequests(policyAddress: string) {
   return genlayerRpc<string[]>({
     method: "gen_call",

@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, Send } from "lucide-react";
+import { Bot, Search, Send } from "lucide-react";
 import { keccak256, stringToHex } from "viem";
 import { Shell } from "@/components/Shell";
 import { friendlyError } from "@/lib/errors";
+import { registryGetPolicy, registryPoliciesForAgent, registryPoliciesForOwner } from "@/lib/genlayer";
 
 const submittedPrefix = "treasury-copilot:submitted:";
 
@@ -12,6 +13,8 @@ export default function AgentTestPage() {
   const [chainId, setChainId] = useState("84532");
   const [policy, setPolicy] = useState(process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "");
   const [delegatedAccount, setDelegatedAccount] = useState("");
+  const [lookupAddress, setLookupAddress] = useState(process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS ?? "");
+  const [discoveredPolicies, setDiscoveredPolicies] = useState<string[]>([]);
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("1");
   const [category, setCategory] = useState("api");
@@ -52,6 +55,26 @@ export default function AgentTestPage() {
     }
   }
 
+  async function discover(mode: "agent" | "owner") {
+    setError("");
+    setStatus("");
+    try {
+      const policies = mode === "agent"
+        ? await registryPoliciesForAgent(lookupAddress)
+        : await registryPoliciesForOwner(lookupAddress);
+      setDiscoveredPolicies(policies);
+      if (policies[0]) {
+        setPolicy(policies[0]);
+        const metadata = await registryGetPolicy(policies[0]);
+        if (metadata.delegated_account) setDelegatedAccount(metadata.delegated_account);
+        if (metadata.chain_id) setChainId(metadata.chain_id);
+      }
+      setStatus(policies.length > 0 ? `Discovered ${policies.length} policy record(s).` : "No policy records found for that address.");
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  }
+
   return (
     <Shell>
       <section className="panel rounded-lg p-5">
@@ -64,6 +87,34 @@ export default function AgentTestPage() {
         </div>
 
         <div className="mt-6 grid gap-4">
+          <div className="rounded-md border border-slate-900/10 bg-slate-50 p-4">
+            <label className="grid gap-2 text-sm font-medium">
+              Discover policy by owner or platform signer
+              <input className="field" value={lookupAddress} onChange={(event) => setLookupAddress(event.target.value)} placeholder="0x owner or platform signer" />
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="inline-flex items-center gap-2 rounded-md border border-slate-900/15 bg-white px-3 py-2 text-xs font-semibold" onClick={() => discover("agent")}>
+                <Search size={14} /> By platform signer
+              </button>
+              <button className="inline-flex items-center gap-2 rounded-md border border-slate-900/15 bg-white px-3 py-2 text-xs font-semibold" onClick={() => discover("owner")}>
+                <Search size={14} /> By owner
+              </button>
+            </div>
+            {discoveredPolicies.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {discoveredPolicies.map((item) => (
+                  <button key={item} className="rounded-md bg-white px-3 py-2 text-xs font-semibold text-slate-700" onClick={async () => {
+                    setPolicy(item);
+                    const metadata = await registryGetPolicy(item);
+                    if (metadata.delegated_account) setDelegatedAccount(metadata.delegated_account);
+                    if (metadata.chain_id) setChainId(metadata.chain_id);
+                  }}>
+                    {item.slice(0, 10)}...
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="grid gap-4 md:grid-cols-3">
             <input className="field" value={chainId} onChange={(event) => setChainId(event.target.value)} placeholder="EVM chain id" />
             <input className="field" value={policy} onChange={(event) => setPolicy(event.target.value)} placeholder="GenLayer policy address" />

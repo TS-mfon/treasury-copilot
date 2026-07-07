@@ -48,7 +48,7 @@ genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args ...
 
 Current StudioNet deployments:
 
-- TreasuryPolicy: `0x39F49354D6064a0603011A7E3c70c45615Da3A3B`
+- TreasuryPolicy: `0xaC8727AA788B19e4344Ee8721d9E249B542022c8`
 - TreasuryRegistry: `0x34f908bf178e84DFF085359cB358246f24660C1E`
 
 Redeploy after changing `TreasuryPolicy.py`; update

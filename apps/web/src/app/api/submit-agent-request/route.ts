@@ -1,13 +1,11 @@
 import { isAddress, isHex, keccak256, parseUnits, stringToHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildTreasuryRequestDomain, treasuryRequestTypes, type TreasuryRequestMessage } from "@treasury-copilot/shared";
+import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
+import { genlayerRead, genlayerWrite } from "@/lib/genlayerServer";
 
 export const runtime = "nodejs";
 
-const rpcUrl = process.env.GENLAYER_RPC_URL ?? process.env.NEXT_PUBLIC_GENLAYER_RPC_URL;
-const oneShotRelayerUrl = process.env.ONE_SHOT_RELAYER_URL
-  ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
-  ?? "https://relayer.1shotapi.dev/relayers";
 const allowedPolicies = csvSet(process.env.ALLOWED_GENLAYER_POLICY_ADDRESSES ?? process.env.NEXT_PUBLIC_GENLAYER_POLICY);
 const allowedChainIds = csvSet(process.env.ALLOWED_EVM_CHAIN_IDS ?? "84532,421614");
 
@@ -63,38 +61,6 @@ function parseSubmitBody(value: unknown): SubmitBody {
   };
 }
 
-async function genlayerRpc<T>(method: string, params: unknown[]): Promise<T> {
-  if (!rpcUrl) throw new Error("GenLayer RPC is not configured");
-  const response = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
-  });
-  const data = await response.json().catch(() => {
-    throw new Error("GenLayer returned an unreadable response");
-  }) as { error?: { message?: string }, result?: T };
-  if (data.error) throw new Error(data.error.message ?? JSON.stringify(data.error));
-  return data.result as T;
-}
-
-async function executeHostedRelayer(relayPayload: Record<string, unknown>) {
-  const response = await fetch(oneShotRelayerUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(relayPayload),
-  });
-  const data = await response.json().catch(async () => ({ raw: await response.text() })) as Record<string, unknown>;
-  if (!response.ok) {
-    throw new Error(`1Shot relayer failed: ${response.status} ${JSON.stringify(data).slice(0, 240)}`);
-  }
-
-  const txHash = String(data.tx_hash ?? data.txHash ?? data.hash ?? "");
-  if (!isHex(txHash, { strict: true })) {
-    throw new Error(`1Shot relayer response missing tx hash: ${JSON.stringify(data).slice(0, 240)}`);
-  }
-  return txHash;
-}
-
 export async function POST(request: Request) {
   try {
     const body = parseSubmitBody(await request.json());
@@ -121,38 +87,49 @@ export async function POST(request: Request) {
       message,
     });
 
-    const genlayer = await genlayerRpc<Record<string, unknown>>("gen_write", [{
-      to: body.policy,
-      method: "submit_request",
-      args: [
-        body.recipient,
-        amountAtto.toString(),
-        body.category,
-        body.justification,
-        justificationHash,
-        signature,
-        requestId,
-        deadline.toString(),
-      ],
-    }]);
+    const submit = await genlayerWrite(body.policy, "submit_request", [
+      body.recipient,
+      amountAtto.toString(),
+      body.category,
+      body.justification,
+      justificationHash,
+      signature,
+      requestId,
+      deadline.toString(),
+    ]);
+    const genlayer = await genlayerRead<Record<string, unknown>>(body.policy, "get_request", [requestId]);
 
     if (genlayer.verdict !== "approved") {
-      return Response.json({ request_id: requestId, signer: account.address, genlayer });
+      return Response.json({ request_id: requestId, signer: account.address, genlayer, submit });
     }
 
-    const relay = genlayer.relay;
-    if (!relay || typeof relay !== "object") throw new Error("Approved request did not include a relay payload");
-    const txHash = await executeHostedRelayer(relay as Record<string, unknown>);
-    const record = await genlayerRpc<Record<string, unknown>>("gen_write", [{
-      to: body.policy,
-      method: "record_execution",
-      args: [requestId, txHash],
-    }]);
+    const policyState = await genlayerRead<Record<string, unknown>>(body.policy, "get_policy");
+    const relay = {
+      policy: body.policy,
+      method_id: String(policyState.one_shot_method_id ?? ""),
+      chain_id: String(policyState.evm_chain_id ?? body.chainId),
+      delegated_account: String(policyState.delegated_account ?? body.delegatedAccount),
+      token: String(policyState.token_address ?? ""),
+      delegation: "metamask-smart-account-payout",
+      permission_context: String(policyState.delegation_context ?? ""),
+      delegation_payload: policyState.delegation_payload,
+      params: {
+        requestId,
+        from: String(policyState.delegated_account ?? body.delegatedAccount),
+        token: String(policyState.token_address ?? ""),
+        recipient: body.recipient,
+        amount: amountAtto.toString(),
+      },
+    };
+    const execution = await executeOneShot(relay as OneShotRelayRequest);
+    const txHash = execution.tx_hash;
+    const record = await genlayerWrite(body.policy, "record_execution", [requestId, txHash]);
 
     return Response.json({
       request_id: requestId,
       signer: account.address,
       genlayer,
+      submit,
       relay: {
         tx_hash: txHash,
         genlayer_record_execution: {
@@ -160,6 +137,7 @@ export async function POST(request: Request) {
           args: [requestId, txHash],
         },
       },
+      one_shot: execution,
       record,
     });
   } catch (error) {
