@@ -28,7 +28,7 @@ contract TreasuryFactory {
 
     function createTreasury(address relayer, address token) external returns (address clone) {
         clone = Clones.clone(treasuryImplementation);
-        Treasury(clone).initialize(msg.sender, relayer, token);
+        Treasury(payable(clone)).initialize(msg.sender, relayer, token);
         emit TreasuryCreated(msg.sender, clone, relayer, token);
     }
 }

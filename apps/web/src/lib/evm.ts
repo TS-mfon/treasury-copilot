@@ -9,20 +9,20 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { arbitrumSepolia, baseSepolia } from "viem/chains";
-import { erc20Abi, SUPPORTED_CHAINS, treasuryAbi, treasuryFactoryAbi, type SupportedChainKey } from "@treasury-copilot/shared";
+import { erc20Abi, SUPPORTED_CHAINS, tokenForChain, type SupportedTokenSymbol, treasuryAbi, treasuryFactoryAbi, type SupportedChainKey } from "@treasury-copilot/shared";
 
 export function getViemChain(key: SupportedChainKey) {
-  if (key === "baseSepolia") return baseSepolia;
-  if (key === "arbitrumSepolia") return arbitrumSepolia;
-  throw new Error("X Layer support is configured for mainnet rollout after testnet proof");
+  return SUPPORTED_CHAINS[key].viemChain;
 }
 
 export function publicClientFor(key: SupportedChainKey) {
   const chain = getViemChain(key);
-  const rpcUrl = key === "baseSepolia"
-    ? process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL
-    : process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL;
+  const rpcUrl = {
+    baseSepolia: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL,
+    arbitrumSepolia: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL,
+    xLayer: process.env.NEXT_PUBLIC_X_LAYER_RPC_URL,
+    xLayerTestnet: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL,
+  }[key];
   return createPublicClient({ chain, transport: http(rpcUrl) });
 }
 
@@ -36,13 +36,14 @@ export async function deployTreasuryClone(key: SupportedChainKey, relayer: Addre
   const wallet = createWalletClient({ account, chain, transport: custom(window.ethereum) });
   const publicClient = publicClientFor(key);
   const hash = await wallet.writeContract({
+    chain,
     address: factoryAddress,
     abi: treasuryFactoryAbi,
     functionName: "createTreasury",
     args: [relayer, token],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  const event = receipt.logs.find((log) => log.address.toLowerCase() === factoryAddress.toLowerCase());
+  const event = receipt.logs.find((log: { address: Address }) => log.address.toLowerCase() === factoryAddress.toLowerCase());
   return { hash, receipt, event };
 }
 
@@ -73,6 +74,7 @@ export async function setTreasuryAuthorizedAgent(key: SupportedChainKey, treasur
   const wallet = createWalletClient({ account, chain, transport: custom(window.ethereum) });
   const publicClient = publicClientFor(key);
   const hash = await wallet.writeContract({
+    chain,
     address: treasury,
     abi: treasuryAbi,
     functionName: "setAuthorizedAgent",
@@ -101,9 +103,19 @@ export async function getExecutionEvents(key: SupportedChainKey, treasury: Addre
 }
 
 export function usdcAddressFor(key: SupportedChainKey): Address {
-  const token = SUPPORTED_CHAINS[key].usdcAddress;
-  if (!token) throw new Error(`Missing USDC address for ${SUPPORTED_CHAINS[key].name}`);
-  return token;
+  return tokenForChain(key, "USDC").address as Address;
+}
+
+export function tokenAddressFor(key: SupportedChainKey, symbol: SupportedTokenSymbol): Address {
+  return tokenForChain(key, symbol).address as Address;
+}
+
+export function tokenDecimalsFor(key: SupportedChainKey, symbol: SupportedTokenSymbol): number {
+  return tokenForChain(key, symbol).decimals;
+}
+
+export function parseTokenAmount(value: string, decimals: number) {
+  return parseUnits(value, decimals);
 }
 
 export function parseUsdcAmount(value: string) {

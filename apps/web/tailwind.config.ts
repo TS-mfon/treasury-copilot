@@ -5,11 +5,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#111827",
-        paper: "#F8FAFC",
-        mint: "#2DD4BF",
-        signal: "#F59E0B",
-        danger: "#DC2626",
+        ink: "#f5f5f5",
+        paper: "#000000",
+        surface: {
+          low: "#0a0a0a",
+          high: "#1a1a1a",
+        },
+        outline: "#262626",
+        purple: "#a78bfa",
+        success: "#4ade80",
+        signal: "#fbbf24",
+        danger: "#f87171",
       },
     },
   },
@@ -17,4 +23,3 @@ const config: Config = {
 };
 
 export default config;
-

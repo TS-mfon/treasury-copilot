@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 interface Vm {
     function prank(address msgSender) external;
     function expectRevert(bytes calldata revertData) external;
+    function deal(address account, uint256 newBalance) external;
 }
 
 contract Test {
@@ -17,4 +18,3 @@ contract Test {
         require(actual == expected, "assertEq(uint256) failed");
     }
 }
-

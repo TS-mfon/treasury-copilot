@@ -33,7 +33,9 @@ forge script script/DeployTreasuryFactory.s.sol \
 
 ## GenLayer
 
-`contracts/genlayer/TreasuryPolicy.py` must pass:
+`contracts/genlayer/TreasuryPolicy.py` is a per-agent contract. Its first deployment arguments are the deployed TreasuryRegistry address and human owner wallet, followed by the registered agent, platform execution reporter, delegated account, asset, caps, and policy text. The policy verifies this registry binding itself before accepting a platform-signed request.
+
+It must pass:
 
 ```bash
 genvm-lint check contracts/genlayer/TreasuryPolicy.py

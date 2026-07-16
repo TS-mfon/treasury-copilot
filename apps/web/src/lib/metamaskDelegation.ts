@@ -23,7 +23,25 @@ export async function requestWeeklyUsdcDelegation(params: {
 }) {
   if (!window.ethereum) throw new Error("MetaMask is required");
   const chain = SUPPORTED_CHAINS[params.chainKey];
-  if (!chain.viemChain) throw new Error("Selected chain is not supported for delegation setup yet");
+  if (chain.tokens.USDC?.kind !== "erc20") throw new Error("ERC-7715 delegation is available only for configured ERC-20 assets");
+
+  // Wallets that do not implement ERC-7715 used to fail only after the user
+  // clicked through the permission UI. Probe capabilities first and turn that
+  // provider mismatch into an actionable setup state.
+  try {
+    const capabilities = await window.ethereum.request({
+      method: "wallet_getCapabilities",
+      params: [params.owner, `0x${chain.chainId.toString(16)}`],
+    }) as Record<string, unknown> | undefined;
+    if (capabilities && !("wallet_requestExecutionPermissions" in capabilities) && !("requestExecutionPermissions" in capabilities)) {
+      throw new Error("wallet_requestExecutionPermissions is not available for this wallet or chain");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("wallet_requestExecutionPermissions") || message.includes("does not exist") || message.includes("not available")) throw error;
+    // Some EIP-1193 providers do not expose capability discovery. The SDK call
+    // below remains the compatibility path and its error is normalized by UI.
+  }
 
   const client = createClient({
     chain: chain.viemChain,

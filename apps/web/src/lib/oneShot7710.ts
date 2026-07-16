@@ -50,6 +50,39 @@ function viemChain(chainId: string) {
   throw new Error(`unsupported delegated execution chain ${chainId}`);
 }
 
+function normalizeChainId(chainId: unknown): string {
+  const value = typeof chainId === "number" ? String(chainId) : typeof chainId === "string" ? chainId : undefined;
+  if (!value) throw new Error("Missing chain id");
+  return value;
+}
+
+function isXLayerChain(chainId: string) {
+  const id = Number(chainId);
+  return id === 196 || id === 195 || id === 194;
+}
+
+async function requireChainCapability(chainId: string) {
+  const capabilities = await getCapabilities(chainId).catch((error) => {
+    throw new Error(`1Shot capability check failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  const capabilityValue = capabilities.capabilities ?? capabilities;
+  if (!capabilityValue || typeof capabilityValue !== "string" || capabilityValue.toLowerCase() === "none") {
+    throw new Error("1Shot execution is unsupported on this network");
+  }
+  if (isXLayerChain(chainId) && !isNativeMessageSupported(capabilities)) {
+    throw new Error("1Shot does not support native OKB on X Layer yet");
+  }
+}
+
+function isNativeMessageSupported(capabilities: unknown) {
+  if (!capabilities || typeof capabilities !== "object") return false;
+  const record = capabilities as Record<string, unknown>;
+  const messages = record.messages as Record<string, unknown> | undefined;
+  if (!messages) return false;
+  const native = messages.native as Record<string, unknown> | undefined;
+  return Boolean(native && Object.keys(native).length > 0);
+}
+
 async function rpcCall<T>(method: string, params: unknown): Promise<T> {
   const response = await fetch(oneShotRpcUrl(), {
     method: "POST",

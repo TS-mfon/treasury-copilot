@@ -27,6 +27,8 @@ contract Treasury is ReentrancyGuard {
     address public relayer;
     address public authorizedAgent;
     IERC20 public token;
+    bool public isNativeAsset;
+    mapping(bytes32 => bool) public executed;
     bool private initialized;
 
     event Funded(address indexed from, uint256 amount);
@@ -49,26 +51,38 @@ contract Treasury is ReentrancyGuard {
         require(!initialized, "already initialized");
         require(_owner != address(0), "owner zero");
         require(_relayer != address(0), "relayer zero");
-        require(_token != address(0), "token zero");
 
         initialized = true;
         owner = _owner;
         relayer = _relayer;
         authorizedAgent = _relayer;
         token = IERC20(_token);
+        isNativeAsset = _token == address(0);
     }
 
     function payout(bytes32 requestId, address recipient, uint256 amount) external onlyRelayer nonReentrant {
         require(recipient != address(0), "recipient zero");
         require(amount > 0, "amount zero");
-        require(token.transfer(recipient, amount), "transfer failed");
+        require(!executed[requestId], "already executed");
+        executed[requestId] = true;
+        if (isNativeAsset) {
+            (bool sent,) = recipient.call{value: amount}("");
+            require(sent, "native transfer failed");
+        } else {
+            require(token.transfer(recipient, amount), "transfer failed");
+        }
         emit Executed(requestId, recipient, amount, block.timestamp);
     }
 
     function withdraw(address recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "recipient zero");
         require(amount > 0, "amount zero");
-        require(token.transfer(recipient, amount), "transfer failed");
+        if (isNativeAsset) {
+            (bool sent,) = recipient.call{value: amount}("");
+            require(sent, "native transfer failed");
+        } else {
+            require(token.transfer(recipient, amount), "transfer failed");
+        }
         emit Withdrawn(recipient, amount);
     }
 
@@ -86,5 +100,10 @@ contract Treasury is ReentrancyGuard {
 
     function notifyFunded(uint256 amount) external {
         emit Funded(msg.sender, amount);
+    }
+
+    receive() external payable {
+        require(isNativeAsset, "native asset disabled");
+        emit Funded(msg.sender, msg.value);
     }
 }

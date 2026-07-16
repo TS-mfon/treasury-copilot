@@ -25,6 +25,8 @@ class PolicyRequest:
     reasoning: str
     tx_hash: str
     created_at: str
+    execution_status: str
+    execution_error: str
 
 
 def _lower(value: str) -> str:
@@ -119,6 +121,7 @@ def _recover_eip712_signer(
 
 class TreasuryPolicy(gl.Contract):
     owner: Address
+    registry: Address
     authorized_agent: Address
     execution_reporter: Address
     delegated_account: str
@@ -140,6 +143,8 @@ class TreasuryPolicy(gl.Contract):
 
     def __init__(
         self,
+        registry: Address,
+        owner: Address,
         authorized_agent: Address,
         execution_reporter: Address,
         delegated_account: Address,
@@ -153,7 +158,10 @@ class TreasuryPolicy(gl.Contract):
         policy_text: str,
         whitelist_csv: str,
     ):
-        self.owner = gl.message.sender_address
+        # The platform deploys this contract, but the human wallet remains the
+        # logical policy owner used for registry binding and owner authorizations.
+        self.owner = owner
+        self.registry = registry
         self.authorized_agent = authorized_agent
         self.execution_reporter = execution_reporter
         self.delegated_account = str(delegated_account)
@@ -187,6 +195,7 @@ class TreasuryPolicy(gl.Contract):
         signature: str,
         request_id: str,
         deadline: u256,
+        on_behalf_of: str = "",
     ) -> dict:
         recipient = str(recipient)
         request_id = _hex32(request_id)
@@ -205,7 +214,12 @@ class TreasuryPolicy(gl.Contract):
             signature,
             self.evm_chain_id,
         )
-        if signer != _lower(str(self.authorized_agent)):
+        if signer == _lower(str(self.authorized_agent)):
+            pass
+        elif signer == _lower(str(self.execution_reporter)) and _lower(on_behalf_of) == _lower(str(self.authorized_agent)):
+            self._require_active_registry_binding(on_behalf_of)
+            pass
+        else:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Unauthorized signer")
 
         self._maybe_reset_weekly_window()
@@ -229,6 +243,7 @@ class TreasuryPolicy(gl.Contract):
 
     @gl.public.write
     def record_execution(self, request_id: str, tx_hash: str) -> dict:
+        self._require_execution_reporter()
         request_id = _hex32(request_id)
         tx_hash = _hex32(tx_hash)
         self._require_existing_request(request_id)
@@ -238,8 +253,38 @@ class TreasuryPolicy(gl.Contract):
         if req.tx_hash != "":
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Execution already recorded")
         req.tx_hash = tx_hash
+        req.execution_status = "executed"
+        req.execution_error = ""
         self.requests[request_id] = req
         return {"request_id": request_id, "tx_hash": tx_hash}
+
+    @gl.public.write
+    def claim_execution(self, request_id: str) -> dict:
+        self._require_execution_reporter()
+        request_id = _hex32(request_id)
+        self._require_existing_request(request_id)
+        req = self.requests[request_id]
+        if req.verdict != VERDICT_APPROVED:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Cannot execute denied request")
+        if req.tx_hash != "" or req.execution_status == "executing":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Request is already being executed")
+        req.execution_status = "executing"
+        req.execution_error = ""
+        self.requests[request_id] = req
+        return {"request_id": request_id, "execution_status": req.execution_status}
+
+    @gl.public.write
+    def record_execution_failure(self, request_id: str, reason: str) -> dict:
+        self._require_execution_reporter()
+        request_id = _hex32(request_id)
+        self._require_existing_request(request_id)
+        req = self.requests[request_id]
+        if req.verdict != VERDICT_APPROVED or req.tx_hash != "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Execution failure cannot be recorded")
+        req.execution_status = "failed"
+        req.execution_error = str(reason)[:800]
+        self.requests[request_id] = req
+        return {"request_id": request_id, "execution_status": req.execution_status}
 
     @gl.public.write
     def update_policy(
@@ -251,7 +296,7 @@ class TreasuryPolicy(gl.Contract):
         auto_approve_threshold_atto: u256,
         policy_text: str,
     ) -> dict:
-        self._require_owner()
+        self._require_owner_or_execution_reporter()
         if auto_approve_threshold_atto > per_tx_cap_atto:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Auto threshold exceeds per-transaction cap")
         self.authorized_agent = authorized_agent
@@ -264,25 +309,29 @@ class TreasuryPolicy(gl.Contract):
 
     @gl.public.write
     def set_whitelist_entry(self, recipient: str, allowed: bool) -> dict:
-        self._require_owner()
+        self._require_owner_or_execution_reporter()
         self.whitelist[_lower(recipient)] = allowed
         self.whitelist_enabled = True
         return {"recipient": _lower(recipient), "allowed": allowed}
 
     @gl.public.write
     def set_whitelist_enabled(self, enabled: bool) -> dict:
-        self._require_owner()
+        self._require_owner_or_execution_reporter()
         self.whitelist_enabled = enabled
         return {"enabled": enabled}
 
     @gl.public.write
     def register_delegation(self, delegation_payload: str, delegated_account: Address, token_address: Address, delegation_context: str) -> dict:
-        self._require_owner_or_authorized_agent()
+        self._require_owner_or_execution_reporter()
         if str(delegation_payload).strip() == "":
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Empty delegation payload")
+        if str(delegation_context).strip() == "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Empty delegation context")
+        if _lower(str(delegated_account)) != _lower(self.delegated_account):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Delegated account mismatch")
+        if _lower(str(token_address)) != _lower(self.token_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Token mismatch")
         self.delegation_payload = delegation_payload
-        self.delegated_account = str(delegated_account)
-        self.token_address = str(token_address)
         self.delegation_context = str(delegation_context)
         return self.get_policy()
 
@@ -290,6 +339,7 @@ class TreasuryPolicy(gl.Contract):
     def get_policy(self) -> dict:
         return {
             "owner": str(self.owner),
+            "registry": str(self.registry),
             "authorized_agent": str(self.authorized_agent),
             "execution_reporter": str(self.execution_reporter),
             "delegated_account": self.delegated_account,
@@ -323,6 +373,8 @@ class TreasuryPolicy(gl.Contract):
             "reasoning": req.reasoning,
             "tx_hash": req.tx_hash,
             "created_at": req.created_at,
+            "execution_status": req.execution_status,
+            "execution_error": req.execution_error,
         }
 
     @gl.public.view
@@ -420,6 +472,8 @@ Return JSON only:
             reasoning=reasoning,
             tx_hash=tx_hash,
             created_at="accepted",
+            execution_status="ready" if verdict == VERDICT_APPROVED else "not_applicable",
+            execution_error="",
         )
         self.request_order.append(request_id)
 
@@ -436,9 +490,33 @@ Return JSON only:
         if gl.message.sender_address != self.owner:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner")
 
+    def _require_active_registry_binding(self, agent: str) -> None:
+        registry = gl.get_contract_at(self.registry)
+        binding = registry.view().get_policy(str(gl.message.contract_address))
+        if not bool(binding["active"]):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Policy is inactive in registry")
+        if _lower(str(binding["agent"])) != _lower(agent):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Agent does not match registry")
+        if _lower(str(binding["owner"])) != _lower(str(self.owner)):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Owner does not match registry")
+        if str(binding["chain_id"]) != str(self.evm_chain_id):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Chain does not match registry")
+        if _lower(str(binding["delegated_account"])) != _lower(self.delegated_account):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Delegated account does not match registry")
+        if _lower(str(binding["token_address"])) != _lower(self.token_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Token does not match registry")
+
     def _require_owner_or_authorized_agent(self) -> None:
         if gl.message.sender_address != self.owner and gl.message.sender_address != self.authorized_agent:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner or authorized agent")
+
+    def _require_execution_reporter(self) -> None:
+        if gl.message.sender_address != self.execution_reporter:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only execution reporter")
+
+    def _require_owner_or_execution_reporter(self) -> None:
+        if gl.message.sender_address != self.owner and gl.message.sender_address != self.execution_reporter:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner or execution reporter")
 
     def _require_new_request(self, request_id: str) -> None:
         try:

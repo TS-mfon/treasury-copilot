@@ -66,9 +66,10 @@ export async function POST(request: Request) {
     const body = parseSubmitBody(await request.json());
     const account = privateKeyToAccount(privateKey());
     const amountAtto = parseUnits(body.amount, 6);
-    const requestId = keccak256(stringToHex(`${body.policy}:${body.delegatedAccount}:${body.recipient}:${body.amount}:${body.category}:${body.justification}`));
+    const requestId = keccak256(stringToHex(`${body.policy}:${body.delegatedAccount}:${body.recipient}:${amountAtto}:${body.category}:${body.justification}:${Date.now().toString()}`));
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
     const justificationHash = keccak256(stringToHex(body.justification));
+
     const message = {
       policy: body.policy,
       delegatedAccount: body.delegatedAccount,

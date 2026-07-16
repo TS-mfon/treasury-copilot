@@ -1,7 +1,15 @@
+import { defineChain, type Abi, type Address, type Hex, type TypedData } from "viem";
 import { arbitrumSepolia, baseSepolia } from "viem/chains";
-import type { Abi, Address, Hex, TypedData } from "viem";
 
-export type SupportedChainKey = "baseSepolia" | "arbitrumSepolia" | "xLayer";
+export type SupportedChainKey = "baseSepolia" | "arbitrumSepolia" | "xLayer" | "xLayerTestnet";
+export type SupportedTokenSymbol = "USDC" | "OKB";
+
+export interface TokenConfig {
+  symbol: SupportedTokenSymbol;
+  address: Address | undefined;
+  decimals: number;
+  kind: "erc20" | "native";
+}
 
 export interface ChainConfig {
   key: SupportedChainKey;
@@ -9,8 +17,37 @@ export interface ChainConfig {
   chainId: number;
   explorerUrl: string;
   nativeSymbol: string;
-  viemChain: typeof baseSepolia | typeof arbitrumSepolia | undefined;
+  viemChain: typeof baseSepolia | typeof arbitrumSepolia | ReturnType<typeof defineChain>;
   usdcAddress: Address | undefined;
+  tokens: Partial<Record<SupportedTokenSymbol, TokenConfig>>;
+}
+
+export const xLayer = defineChain({
+  id: 196,
+  name: "X Layer",
+  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
+  rpcUrls: {
+    default: { http: [process.env.NEXT_PUBLIC_X_LAYER_RPC_URL ?? "https://rpc.xlayer.tech"] },
+  },
+  blockExplorers: {
+    default: { name: "OKLink", url: "https://www.oklink.com/xlayer" },
+  },
+});
+
+export const xLayerTestnet = defineChain({
+  id: 195,
+  name: "X Layer Testnet",
+  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
+  rpcUrls: {
+    default: { http: [process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL ?? "https://testrpc.xlayer.tech"] },
+  },
+  blockExplorers: {
+    default: { name: "OKLink", url: "https://www.oklink.com/xlayer-test" },
+  },
+});
+
+function token(symbol: SupportedTokenSymbol, address: Address | undefined, decimals: number, kind: "erc20" | "native" = "erc20"): TokenConfig {
+  return { symbol, address, decimals, kind };
 }
 
 export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
@@ -22,6 +59,9 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeSymbol: "ETH",
     viemChain: baseSepolia,
     usdcAddress: process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined,
+    tokens: {
+      USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC_DECIMALS ?? 6)),
+    },
   },
   arbitrumSepolia: {
     key: "arbitrumSepolia",
@@ -31,6 +71,9 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeSymbol: "ETH",
     viemChain: arbitrumSepolia,
     usdcAddress: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined,
+    tokens: {
+      USDC: token("USDC", process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC_DECIMALS ?? 6)),
+    },
   },
   xLayer: {
     key: "xLayer",
@@ -38,10 +81,45 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: 196,
     explorerUrl: "https://www.oklink.com/xlayer",
     nativeSymbol: "OKB",
-    viemChain: undefined,
+    viemChain: xLayer,
     usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined,
+    tokens: {
+      USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_USDC_DECIMALS ?? 6)),
+      OKB: token("OKB", undefined, 18, "native"),
+    },
+  },
+  xLayerTestnet: {
+    key: "xLayerTestnet",
+    name: "X Layer Testnet",
+    chainId: 195,
+    explorerUrl: "https://www.oklink.com/xlayer-test",
+    nativeSymbol: "OKB",
+    viemChain: xLayerTestnet,
+    usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined,
+    tokens: {
+      USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC_DECIMALS ?? 6)),
+      OKB: token("OKB", undefined, 18, "native"),
+    },
   },
 };
+
+export function chainById(chainId: number): ChainConfig | undefined {
+  return Object.values(SUPPORTED_CHAINS).find((chain) => chain.chainId === chainId);
+}
+
+export function tokenForChain(key: SupportedChainKey, symbol: SupportedTokenSymbol): TokenConfig {
+  const config = SUPPORTED_CHAINS[key].tokens[symbol];
+  if (!config || (config.kind === "erc20" && !config.address)) throw new Error(`${symbol} is not configured for ${SUPPORTED_CHAINS[key].name}`);
+  return config;
+}
+
+export function tokenForChainId(chainId: number, symbol: SupportedTokenSymbol): TokenConfig {
+  const chain = chainById(chainId);
+  if (!chain) throw new Error(`Unsupported chain id ${chainId}`);
+  const config = chain.tokens[symbol];
+  if (!config || (config.kind === "erc20" && !config.address)) throw new Error(`${symbol} is not configured for ${chain.name}`);
+  return config;
+}
 
 export const treasuryAbi = [
   {
@@ -117,6 +195,20 @@ export const treasuryAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "isNativeAsset",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }]
+  },
+  {
+    type: "function",
+    name: "executed",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }]
   },
   {
     type: "event",

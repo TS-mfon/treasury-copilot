@@ -86,6 +86,30 @@ contract TreasuryTest is Test {
         treasury.payout(bytes32("req"), recipient, 10e6);
     }
 
+    function testRequestCannotExecuteTwice() public {
+        bytes32 requestId = bytes32("only-once");
+        vm.prank(relayer);
+        treasury.payout(requestId, recipient, 10e6);
+
+        vm.prank(relayer);
+        vm.expectRevert("already executed");
+        treasury.payout(requestId, recipient, 10e6);
+    }
+
+    function testNativeTreasuryPaysAndWithdraws() public {
+        Treasury nativeTreasury = new Treasury();
+        nativeTreasury.initialize(owner, relayer, address(0));
+        vm.deal(address(nativeTreasury), 2 ether);
+
+        vm.prank(relayer);
+        nativeTreasury.payout(bytes32("native"), recipient, 1 ether);
+        assertEq(recipient.balance, 1 ether);
+
+        vm.prank(owner);
+        nativeTreasury.withdraw(owner, 1 ether);
+        assertEq(owner.balance, 1 ether);
+    }
+
     function testFactoryCreatesInitializedClone() public {
         Treasury implementation = new Treasury();
         TreasuryFactory factory = new TreasuryFactory(address(implementation));
@@ -93,9 +117,9 @@ contract TreasuryTest is Test {
         vm.prank(owner);
         address clone = factory.createTreasury(relayer, address(usdc));
 
-        assertEq(Treasury(clone).owner(), owner);
-        assertEq(Treasury(clone).relayer(), relayer);
-        assertEq(Treasury(clone).authorizedAgent(), relayer);
-        assertEq(address(Treasury(clone).token()), address(usdc));
+        assertEq(Treasury(payable(clone)).owner(), owner);
+        assertEq(Treasury(payable(clone)).relayer(), relayer);
+        assertEq(Treasury(payable(clone)).authorizedAgent(), relayer);
+        assertEq(address(Treasury(payable(clone)).token()), address(usdc));
     }
 }
