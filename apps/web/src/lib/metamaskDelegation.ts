@@ -54,10 +54,13 @@ export async function requestWeeklyUsdcDelegation(params: {
     transport: custom(window.ethereum),
   }).extend(erc7715ProviderActions());
 
+  const currentTime = Math.floor(Date.now() / 1000);
+  const expiry = currentTime + 7 * 24 * 60 * 60;
+
   const [grant] = await client.requestExecutionPermissions([
     {
       chainId: chain.chainId,
-      from: params.owner,
+      expiry,
       to: params.platformDelegate,
       permission: {
         type: "erc20-token-periodic",
