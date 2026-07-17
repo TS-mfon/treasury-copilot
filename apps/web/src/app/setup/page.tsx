@@ -80,7 +80,7 @@ export default function SetupPage() {
       setStatus(`Opening wallet permission request for weekly ${tokenSymbol} delegation...`);
       const result = await requestWeeklyUsdcDelegation({
         owner: address,
-        agent: platformDelegate,
+        agent: effectiveAgent,
         chainKey,
         token,
         weeklyAllowanceAtto: parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6),
