@@ -103,39 +103,55 @@ export default function SetupPage() {
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isMissing =
-        message.includes("wallet_requestExecutionPermissions") ||
-        message.includes("does not exist") ||
-        message.includes("not available");
-      if (isMissing && !switched && selectedChain.chainId) {
-        // Retry once after an explicit chain switch; some MetaMask flows only
-        // expose ERC-7715 after the chain change is surfaced to the user.
-        try {
-          if (!address) throw new Error("Connect MetaMask first");
-          if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
-          const ownerAddress = address;
-          const tokenAddress = token;
-          const weeklyAllowanceAtto = parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6);
-          await switchChainAsync({ chainId: selectedChain.chainId });
-          await requestWeeklyUsdcDelegation({
-            owner: ownerAddress,
-            agent: effectiveAgent,
-            chainKey,
-            token: tokenAddress,
-            weeklyAllowanceAtto,
-            platformDelegate: platformDelegate as Address,
-          });
-          setGrant(null);
-          setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
-          return;
-        } catch (retryError) {
-          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+      const normalized = message.toLowerCase();
+      const looksUnsupported =
+        normalized.includes("wallet_requestexecutionpermissions") ||
+        normalized.includes("does not exist") ||
+        normalized.includes("not available") ||
+        normalized.includes("too old") ||
+        normalized.includes("not upgraded") ||
+        normalized.includes("not be upgraded") ||
+        normalized.includes("connected account") && normalized.includes("smart account");
+
+      if (looksUnsupported) {
+        if (!switched && selectedChain.chainId) {
+          try {
+            if (!address) throw new Error("Connect MetaMask first");
+            if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
+            const ownerAddress = address;
+            const tokenAddress = token;
+            const weeklyAllowanceAtto = parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6);
+            await switchChainAsync({ chainId: selectedChain.chainId });
+            const result = await requestWeeklyUsdcDelegation({
+              owner: ownerAddress,
+              agent: effectiveAgent,
+              chainKey,
+              token: tokenAddress,
+              weeklyAllowanceAtto,
+              platformDelegate: platformDelegate as Address,
+            });
+            setGrant(result);
+            setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
+            return;
+          } catch (retryError) {
+            const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+            setError(
+              "MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network."
+            );
+            console.error("[approveDelegation] ERC-7715 retry failed", {
+              cause: retryMessage,
+              switched,
+            });
+          }
+        } else {
           setError(
             "MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network."
           );
+          console.error("[approveDelegation] ERC-7715 unsupported wallet/chain", {
+            cause: message,
+            switched,
+          });
         }
-      } else if (isMissing) {
-        setError("MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network.");
       } else {
         setError(message || friendlyError(err));
       }
