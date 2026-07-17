@@ -20,6 +20,7 @@ export async function requestWeeklyUsdcDelegation(params: {
   chainKey: SupportedChainKey;
   token: Address;
   weeklyAllowanceAtto: bigint;
+  platformDelegate: Address;
 }) {
   if (!window.ethereum) throw new Error("MetaMask is required");
   const chain = SUPPORTED_CHAINS[params.chainKey];
@@ -43,9 +44,9 @@ export async function requestWeeklyUsdcDelegation(params: {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[erc7715] capability preflight failed:", message);
-    // Some EIP-1193 providers do not expose capability discovery. Continue
-    // to the actual wallet call so the user can still approve the permission.
+    if (message.includes("wallet_requestExecutionPermissions") || message.includes("does not exist") || message.includes("not available")) throw error;
+    // Some EIP-1193 providers do not expose capability discovery. The SDK call
+    // below remains the compatibility path and its error is normalized by UI.
   }
 
   const client = createClient({
@@ -57,7 +58,7 @@ export async function requestWeeklyUsdcDelegation(params: {
     {
       chainId: chain.chainId,
       from: params.owner,
-      to: params.agent,
+      to: params.platformDelegate,
       permission: {
         type: "erc20-token-periodic",
         isAdjustmentAllowed: false,

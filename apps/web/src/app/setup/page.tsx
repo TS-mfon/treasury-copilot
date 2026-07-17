@@ -47,7 +47,7 @@ export default function SetupPage() {
     ?? availableConnectors.find((connector) => connector.name.toLowerCase().includes("metaMask".toLowerCase()))
     ?? availableConnectors[0];
   const effectiveAgent = agentAddress as Address;
-  const platformDelegate = operatorAddress;
+  const platformDelegate = operatorAddress ?? process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS;
 
   const caps = useMemo(() => ({
     perTxCapAtto: parseTokenAmount(perTxCap || "0", tokenConfig?.decimals ?? 6).toString(),
@@ -84,6 +84,7 @@ export default function SetupPage() {
         chainKey,
         token,
         weeklyAllowanceAtto: parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6),
+        platformDelegate: platformDelegate as Address,
       });
       setGrant(result);
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
