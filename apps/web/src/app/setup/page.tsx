@@ -31,7 +31,7 @@ export default function SetupPage() {
   const [threshold, setThreshold] = useState("5");
   const [whitelist, setWhitelist] = useState("");
   const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
-  const [grant, setGrant] = useState<TreasuryDelegationGrant | null>(null);
+  const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
   const [status, setStatus] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
@@ -68,32 +68,76 @@ export default function SetupPage() {
   async function approveDelegation() {
     setError("");
     setIsDelegating(true);
+    let switched = false;
     try {
       if (!address) throw new Error("Connect MetaMask first");
       if (!platformDelegate || !isAddress(platformDelegate)) throw new Error("Platform signer is not configured");
       if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent address");
       if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
-      if (chainId !== selectedChain.chainId) {
-        await switchChainAsync({ chainId: selectedChain.chainId });
+
+      const ownerAddress = address;
+      const tokenAddress = token;
+      const weeklyAllowanceAtto = parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6);
+
+      if (chainId && Number(chainId) !== selectedChain.chainId) {
+        setStatus(`Switching to ${selectedChain.name} before approval...`);
+        try {
+          await switchChainAsync({ chainId: selectedChain.chainId });
+          switched = true;
+        } catch (switchError) {
+          const message = switchError instanceof Error ? switchError.message : String(switchError);
+          throw new Error(`Chain switch failed: ${message}`);
+        }
       }
 
       setStatus(`Opening wallet permission request for weekly ${tokenSymbol} delegation...`);
       const result = await requestWeeklyUsdcDelegation({
-        owner: address,
+        owner: ownerAddress,
         agent: effectiveAgent,
         chainKey,
-        token,
-        weeklyAllowanceAtto: parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6),
+        token: tokenAddress,
+        weeklyAllowanceAtto,
         platformDelegate: platformDelegate as Address,
       });
       setGrant(result);
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("wallet_requestExecutionPermissions") || message.includes("does not exist") || message.includes("not available")) {
+      const isMissing =
+        message.includes("wallet_requestExecutionPermissions") ||
+        message.includes("does not exist") ||
+        message.includes("not available");
+      if (isMissing && !switched && selectedChain.chainId) {
+        // Retry once after an explicit chain switch; some MetaMask flows only
+        // expose ERC-7715 after the chain change is surfaced to the user.
+        try {
+          if (!address) throw new Error("Connect MetaMask first");
+          if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
+          const ownerAddress = address;
+          const tokenAddress = token;
+          const weeklyAllowanceAtto = parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6);
+          await switchChainAsync({ chainId: selectedChain.chainId });
+          await requestWeeklyUsdcDelegation({
+            owner: ownerAddress,
+            agent: effectiveAgent,
+            chainKey,
+            token: tokenAddress,
+            weeklyAllowanceAtto,
+            platformDelegate: platformDelegate as Address,
+          });
+          setGrant(null);
+          setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
+          return;
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          setError(
+            "MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network."
+          );
+        }
+      } else if (isMissing) {
         setError("MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network.");
       } else {
-        setError(message);
+        setError(message || friendlyError(err));
       }
     } finally {
       setIsDelegating(false);
