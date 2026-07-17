@@ -101,10 +101,12 @@ async function getProviderVersion(ethereum: MetaMaskProvider): Promise<string> {
     throw new Error("MetaMask did not return a client version string.");
   }
 
-  const match = raw.match(/MetaMask\/v?([0-9]+\.[0-9]+\.[0-9]+[^ ]*)/i);
-  if (!match) throw new Error(`Unexpected MetaMask version format: ${raw}`);
+  const fallbackVersion = raw.replace(/[^0-9.]/g, "").trim() || raw;
+  const match = raw.match(/\/([0-9]+\.[0-9]+(\.[0-9]+)?)/i);
+  const parsedVersion = match ? match[1].replace(/[^0-9.]/g, "").trim() : fallbackVersion;
+  if (!parsedVersion) throw new Error(`Unexpected MetaMask version format: ${raw}`);
 
-  return match[1];
+  return parsedVersion;
 }
 
 async function ensureSmartAccountUpgrade(ethereum: MetaMaskProvider, owner: Address, chainId: number) {
@@ -193,7 +195,7 @@ export async function requestWeeklyUsdcDelegation(params: {
   }
 
   const minVersion = toComparableVersion(MIN_METAMASK_VERSION);
-  const installedVersion = parseInt(declaredVersion.split(".")[0] ?? "0", 10);
+  const installedVersion = toComparableVersion(declaredVersion);
   if (installedVersion < minVersion) {
     fail(
       `MetaMask ${declaredVersion} is too old for ERC-20 periodic permissions. Minimum required MetaMask version is ${MIN_METAMASK_VERSION}.`,
@@ -231,7 +233,6 @@ export async function requestWeeklyUsdcDelegation(params: {
           tokenAddress: params.token,
           periodAmount: params.weeklyAllowanceAtto,
           periodDuration: WEEK_IN_SECONDS,
-          startTime: currentTime,
           justification: "Treasury Copilot weekly agent spending delegation",
         },
         isAdjustmentAllowed: false,
