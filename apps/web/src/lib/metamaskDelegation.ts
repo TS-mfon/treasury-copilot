@@ -33,14 +33,19 @@ export async function requestWeeklyUsdcDelegation(params: {
       method: "wallet_getCapabilities",
       params: [params.owner, `0x${chain.chainId.toString(16)}`],
     }) as Record<string, unknown> | undefined;
-    if (capabilities && !("wallet_requestExecutionPermissions" in capabilities) && !("requestExecutionPermissions" in capabilities)) {
-      throw new Error("wallet_requestExecutionPermissions is not available for this wallet or chain");
+    const hasCapability = !!(
+      capabilities &&
+      (("wallet_requestExecutionPermissions" in capabilities) ||
+        ("requestExecutionPermissions" in capabilities))
+    );
+    if (!hasCapability) {
+      console.warn("[erc7715] wallet_getCapabilities did not list execution-permission support; attempting the wallet call anyway");
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("wallet_requestExecutionPermissions") || message.includes("does not exist") || message.includes("not available")) throw error;
-    // Some EIP-1193 providers do not expose capability discovery. The SDK call
-    // below remains the compatibility path and its error is normalized by UI.
+    console.warn("[erc7715] capability preflight failed:", message);
+    // Some EIP-1193 providers do not expose capability discovery. Continue
+    // to the actual wallet call so the user can still approve the permission.
   }
 
   const client = createClient({

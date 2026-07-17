@@ -88,7 +88,12 @@ export default function SetupPage() {
       setGrant(result);
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
     } catch (err) {
-      setError(friendlyError(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("wallet_requestExecutionPermissions") || message.includes("does not exist") || message.includes("not available")) {
+        setError("MetaMask rejected the ERC-7715 permission call on this chain. Update MetaMask, enable advanced permissions if available, or switch to a supported wallet/network.");
+      } else {
+        setError(message);
+      }
     } finally {
       setIsDelegating(false);
     }
