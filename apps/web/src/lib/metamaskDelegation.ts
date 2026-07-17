@@ -133,38 +133,48 @@ export async function requestWeeklyUsdcDelegation(params: {
     installedMetaMaskVersion: await getProviderVersion(ethereumProvider).catch(() => "unknown"),
   });
 
-  const [grant] = (await requestExecutionPermissions(ethereumProvider as never, [
-    {
-      chainId: chain.chainId,
-      to: params.platformDelegate,
-      expiry,
-      permission: {
-        type: "erc20-token-periodic",
-        data: {
-          tokenAddress: params.token,
-          periodAmount: params.weeklyAllowanceAtto,
-          periodDuration: WEEK_IN_SECONDS,
-          startTime: currentTime,
-          justification: "Treasury Copilot weekly agent spending delegation",
+  try {
+    const [grant] = await requestExecutionPermissions(ethereumProvider as never, [
+      {
+        chainId: chain.chainId,
+        to: params.platformDelegate,
+        expiry,
+        permission: {
+          type: "erc20-token-periodic",
+          data: {
+            tokenAddress: params.token,
+            periodAmount: params.weeklyAllowanceAtto,
+            periodDuration: WEEK_IN_SECONDS,
+            startTime: currentTime,
+            justification: "Treasury Copilot weekly agent spending delegation",
+          },
+          isAdjustmentAllowed: false,
         },
-        isAdjustmentAllowed: false,
       },
-    },
-  ]));
+    ]);
 
-  if (!grant?.context || !grant.delegationManager) {
-    throw new Error("MetaMask did not return a usable delegation context");
+    if (!grant?.context || !grant.delegationManager) {
+      throw new Error("MetaMask did not return a usable delegation context");
+    }
+
+    return {
+      owner: params.owner,
+      agent: params.agent,
+      chainId: chain.chainId,
+      token: params.token,
+      weeklyAllowanceAtto: params.weeklyAllowanceAtto.toString(),
+      permissionContext: grant.context,
+      delegationManager: grant.delegationManager,
+      delegatedAccount: (grant.from as Address) ?? params.owner,
+      raw: grant,
+    } satisfies TreasuryDelegationGrant;
+  } catch (rawError) {
+    const reason =
+      rawError instanceof Error
+        ? rawError.message
+        : typeof rawError === "string"
+          ? rawError
+          : JSON.stringify(rawError);
+    throw new Error(`ERC-7715 permission request failed: ${reason}`);
   }
-
-  return {
-    owner: params.owner,
-    agent: params.agent,
-    chainId: chain.chainId,
-    token: params.token,
-    weeklyAllowanceAtto: params.weeklyAllowanceAtto.toString(),
-    permissionContext: grant.context,
-    delegationManager: grant.delegationManager,
-    delegatedAccount: (grant.from as Address) ?? params.owner,
-    raw: grant,
-  } satisfies TreasuryDelegationGrant;
 }
