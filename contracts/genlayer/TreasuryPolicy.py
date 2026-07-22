@@ -74,6 +74,10 @@ def _require_address_string(value: str, label: str) -> str:
     return raw
 
 
+def _address(value: str, label: str) -> Address:
+    return Address(_require_address_string(value, label))
+
+
 def _message_timestamp() -> int:
     current = datetime.fromisoformat(str(gl.message_raw["datetime"]).replace("Z", "+00:00"))
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -105,12 +109,12 @@ class TreasuryPolicy(gl.Contract):
 
     def __init__(
         self,
-        registry: Address,
-        owner: Address,
-        authorized_agent: Address,
-        execution_reporter: Address,
-        delegated_account: Address,
-        token_address: Address,
+        registry: str,
+        owner: str,
+        authorized_agent: str,
+        execution_reporter: str,
+        delegated_account: str,
+        token_address: str,
         delegation_context: str,
         one_shot_method_id: str,
         evm_chain_id: u256,
@@ -122,12 +126,12 @@ class TreasuryPolicy(gl.Contract):
     ):
         # The platform deploys this contract, but the human wallet remains the
         # logical policy owner used for registry binding and owner authorizations.
-        self.owner = owner
-        self.registry = registry
-        self.authorized_agent = authorized_agent
-        self.execution_reporter = execution_reporter
-        self.delegated_account = str(delegated_account)
-        self.token_address = str(token_address)
+        self.owner = _address(owner, "owner")
+        self.registry = _address(registry, "registry")
+        self.authorized_agent = _address(authorized_agent, "authorized agent")
+        self.execution_reporter = _address(execution_reporter, "execution reporter")
+        self.delegated_account = _require_address_string(delegated_account, "delegated account")
+        self.token_address = _require_address_string(token_address, "token")
         self.delegation_context = str(delegation_context)
         self.delegation_payload = ""
         self.one_shot_method_id = one_shot_method_id
@@ -281,8 +285,8 @@ class TreasuryPolicy(gl.Contract):
     @gl.public.write
     def update_policy(
         self,
-        authorized_agent: Address,
-        execution_reporter: Address,
+        authorized_agent: str,
+        execution_reporter: str,
         per_tx_cap_atto: u256,
         weekly_cap_atto: u256,
         auto_approve_threshold_atto: u256,
@@ -300,8 +304,8 @@ class TreasuryPolicy(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Auto threshold exceeds per-transaction cap")
         if len(str(policy_text).strip()) < 8 or len(str(policy_text)) > 4000:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Policy text must be 8-4000 characters")
-        self.authorized_agent = authorized_agent
-        self.execution_reporter = execution_reporter
+        self.authorized_agent = _address(authorized_agent, "authorized agent")
+        self.execution_reporter = _address(execution_reporter, "execution reporter")
         self.per_tx_cap_atto = per_tx_cap_atto
         self.weekly_cap_atto = weekly_cap_atto
         self.auto_approve_threshold_atto = auto_approve_threshold_atto
@@ -330,7 +334,7 @@ class TreasuryPolicy(gl.Contract):
         return {"enabled": enabled}
 
     @gl.public.write
-    def register_delegation(self, delegation_payload: str, delegated_account: Address, token_address: Address, delegation_context: str) -> dict:
+    def register_delegation(self, delegation_payload: str, delegated_account: str, token_address: str, delegation_context: str) -> dict:
         self._require_owner_or_execution_reporter()
         if str(delegation_payload).strip() == "":
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Empty delegation payload")
@@ -349,6 +353,7 @@ class TreasuryPolicy(gl.Contract):
     @gl.public.view
     def get_policy(self) -> dict:
         return {
+            "contract_version": "2",
             "owner": str(self.owner),
             "registry": str(self.registry),
             "authorized_agent": str(self.authorized_agent),

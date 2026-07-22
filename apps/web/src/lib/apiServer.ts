@@ -18,6 +18,7 @@ export interface SpendPayload {
 }
 
 export interface PolicyState {
+  contract_version?: string;
   owner?: string;
   authorized_agent?: string;
   execution_reporter?: string;
@@ -179,12 +180,12 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
 
   const submit = await genlayerWrite(claims.policy, "submit_request", [
     payload.recipient,
-    amountAtto.toString(),
+    amountAtto,
     payload.category,
     payload.justification,
     justificationHash,
     requestId,
-    deadline.toString(),
+    deadline,
     claims.agent,
   ], "finalized");
   await genlayerWrite(claims.policy, "mark_request_finalized", [requestId]);

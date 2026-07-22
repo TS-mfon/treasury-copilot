@@ -32,6 +32,55 @@ function client() {
   return cachedClient;
 }
 
+export function assertGenLayerExecutionSucceeded(
+  receipt: Record<string, unknown>,
+  operation: string,
+) {
+  const directExecution = String(
+    receipt.txExecutionResultName
+    ?? receipt.tx_execution_result_name
+    ?? receipt.executionResult
+    ?? receipt.execution_result
+    ?? "",
+  ).toUpperCase();
+  if (directExecution.includes("ERROR") || directExecution.includes("FINISHED_WITH_ERROR")) {
+    throw new Error(`${operation} failed on GenLayer: ${directExecution}`);
+  }
+
+  const consensus = (receipt.consensus_data ?? receipt.consensusData) as Record<string, unknown> | undefined;
+  const leaderReceipts = consensus?.leader_receipt ?? consensus?.leaderReceipt;
+  if (!Array.isArray(leaderReceipts)) return;
+
+  for (const rawLeaderReceipt of leaderReceipts) {
+    if (!rawLeaderReceipt || typeof rawLeaderReceipt !== "object") continue;
+    const leaderReceipt = rawLeaderReceipt as Record<string, unknown>;
+    const mode = String(leaderReceipt.mode ?? "").toLowerCase();
+    const execution = String(
+      leaderReceipt.execution_result
+      ?? leaderReceipt.executionResult
+      ?? "",
+    ).toUpperCase();
+    const result = leaderReceipt.result as Record<string, unknown> | undefined;
+    const resultStatus = String(result?.status ?? "").toLowerCase();
+    const genvmResult = leaderReceipt.genvm_result as Record<string, unknown> | undefined;
+    const quorumCancelled = String(genvmResult?.error_code ?? "") === "CONSENSUS_VALIDATOR_QUORUM_REACHED";
+    if (
+      mode === "leader"
+      && !quorumCancelled
+      && (
+        execution.includes("ERROR")
+        || execution.includes("FINISHED_WITH_ERROR")
+        || resultStatus === "contract_error"
+      )
+    ) {
+      const stderr = typeof genvmResult?.stderr === "string"
+        ? genvmResult.stderr.trim().split("\n").slice(-4).join(" ")
+        : "";
+      throw new Error(`${operation} failed on GenLayer${stderr ? `: ${stderr}` : ""}`);
+    }
+  }
+}
+
 export async function genlayerRead<T>(
   address: Address,
   functionName: string,
@@ -65,6 +114,7 @@ export async function genlayerWrite(
     interval: 3000,
   });
   const rawReceipt = receipt as Record<string, unknown>;
+  assertGenLayerExecutionSucceeded(rawReceipt, functionName);
   const resultName = String(rawReceipt.resultName ?? rawReceipt.result_name ?? "");
   const statusName = String(rawReceipt.statusName ?? rawReceipt.status_name ?? "");
   if (statusName === "UNDETERMINED" || resultName === "UNDETERMINED") {
@@ -116,5 +166,6 @@ export async function deployTreasuryPolicy(args: unknown[]) {
     retries: 120,
     interval: 3000,
   }) as Record<string, unknown>;
+  assertGenLayerExecutionSucceeded(receipt, "Treasury policy deployment");
   return { hash, receipt, address: deployedAddress(receipt) };
 }

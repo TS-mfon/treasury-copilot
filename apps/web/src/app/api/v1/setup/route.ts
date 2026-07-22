@@ -88,6 +88,7 @@ function parseBody(value: unknown) {
 async function matchingPolicy(owner: Address, body: ReturnType<typeof parseBody>, token: Address) {
   const registry = registryAddress();
   const policies = await genlayerRead<string[]>(registry, "policies_for_owner", [owner]);
+  const legacyPolicies: Address[] = [];
   for (const policy of policies) {
     if (!isAddress(policy)) continue;
     const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [policy]);
@@ -99,10 +100,15 @@ async function matchingPolicy(owner: Address, body: ReturnType<typeof parseBody>
       && binding.token_address.toLowerCase() === token.toLowerCase()
       && Number(binding.chain_id) === body.chainId
     ) {
-      return policy as Address;
+      const policyAddress = policy as Address;
+      const state = await readPolicyState(policyAddress);
+      if (state.contract_version === "2") {
+        return { policy: policyAddress, legacyPolicies };
+      }
+      legacyPolicies.push(policyAddress);
     }
   }
-  return undefined;
+  return { policy: undefined, legacyPolicies };
 }
 
 export async function GET() {
@@ -179,7 +185,8 @@ export async function POST(request: Request) {
       signature: body.signature,
     });
 
-    let policy = await matchingPolicy(owner, body, token.address);
+    const match = await matchingPolicy(owner, body, token.address);
+    let policy = match.policy;
     let deployment: Awaited<ReturnType<typeof deployTreasuryPolicy>> | null = null;
 
     if (!policy) {
@@ -192,10 +199,10 @@ export async function POST(request: Request) {
         token.address,
         body.permissionContext,
         "",
-        body.chainId.toString(),
-        perTx.toString(),
-        weekly.toString(),
-        threshold.toString(),
+        body.chainId,
+        perTx,
+        weekly,
+        threshold,
         body.policyText,
         body.whitelist,
       ]);
@@ -204,27 +211,30 @@ export async function POST(request: Request) {
         owner,
         body.agent,
         policy,
-        body.chainId.toString(),
+        body.chainId,
         body.delegatedAccount,
         token.address,
         token.symbol,
-        token.decimals.toString(),
-        body.nonce.toString(),
+        token.decimals,
+        body.nonce,
       ]);
+      for (const legacyPolicy of match.legacyPolicies) {
+        await genlayerWrite(registry, "set_policy_active", [legacyPolicy, false]);
+      }
     } else {
       const currentPolicy = await readPolicyState(policy);
       await genlayerWrite(policy, "update_policy", [
         body.agent,
         platform,
-        perTx.toString(),
-        weekly.toString(),
-        threshold.toString(),
+        perTx,
+        weekly,
+        threshold,
         body.policyText,
-        String(currentPolicy.policy_nonce ?? "0"),
+        BigInt(String(currentPolicy.policy_nonce ?? "0")),
       ]);
       await genlayerWrite(registry, "consume_owner_nonce", [
         owner,
-        body.nonce.toString(),
+        body.nonce,
       ]);
     }
 

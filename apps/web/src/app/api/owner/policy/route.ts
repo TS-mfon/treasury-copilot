@@ -54,7 +54,7 @@ export async function PUT(request: Request) {
         },
         signature: signature as Hex,
       });
-      const write = await genlayerWrite(policy, "set_whitelist_enabled", [body.enabled, nonce.toString()]);
+      const write = await genlayerWrite(policy, "set_whitelist_enabled", [body.enabled, nonce]);
       return Response.json({ updated: true, policy, write, state: await readPolicyState(policy) });
     }
 
@@ -79,7 +79,7 @@ export async function PUT(request: Request) {
         },
         signature: signature as Hex,
       });
-      const write = await genlayerWrite(policy, "set_whitelist_entry", [recipient, body.allowed, nonce.toString()]);
+      const write = await genlayerWrite(policy, "set_whitelist_entry", [recipient, body.allowed, nonce]);
       return Response.json({ updated: true, policy, write, state: await readPolicyState(policy) });
     }
 
@@ -117,11 +117,11 @@ export async function PUT(request: Request) {
     const write = await genlayerWrite(policy, "update_policy", [
       state.authorized_agent,
       state.execution_reporter,
-      perTx.toString(),
-      weekly.toString(),
-      threshold.toString(),
+      perTx,
+      weekly,
+      threshold,
       body.policy_text.trim(),
-      nonce.toString(),
+      nonce,
     ]);
     return Response.json({ updated: true, policy, write, state: await readPolicyState(policy) });
   } catch (error) {
