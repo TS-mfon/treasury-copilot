@@ -4,6 +4,7 @@ import { createAccount, createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 import type { Address, Hex } from "viem";
+import { canonicalGenLayerAddress } from "@/lib/genlayerAddress";
 
 type GenLayerServerClient = ReturnType<typeof createClient>;
 type GenLayerAccount = ReturnType<typeof createAccount>;
@@ -37,7 +38,7 @@ export async function genlayerRead<T>(
   args: unknown[] = [],
 ) {
   return await client().readContract({
-    address,
+    address: canonicalGenLayerAddress(address),
     functionName,
     args: args as never[],
     jsonSafeReturn: true,
@@ -52,7 +53,7 @@ export async function genlayerWrite(
 ) {
   const hash = await client().writeContract({
     account: account(),
-    address,
+    address: canonicalGenLayerAddress(address),
     functionName,
     args: args as never[],
     value: 0n,

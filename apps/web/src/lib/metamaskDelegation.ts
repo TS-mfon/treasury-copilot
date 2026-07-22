@@ -9,6 +9,7 @@ import {
   type GetGrantedExecutionPermissionsResult,
 } from "@metamask/smart-accounts-kit/actions";
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
+import { errorMessage } from "@/lib/errors";
 
 const WEEK_IN_SECONDS = 7 * 24 * 60 * 60;
 const DELEGATION_PREFIX = "0xef0100";
@@ -126,7 +127,7 @@ export async function preflightWeeklyUsdcDelegation(params: {
   try {
     supported = await getSupportedExecutionPermissions(provider as never);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = errorMessage(error);
     if (
       reason.toLowerCase().includes("does not exist")
       || reason.toLowerCase().includes("corresponding handler")
@@ -198,12 +199,7 @@ export async function requestWeeklyUsdcDelegation(params: {
       raw: grant,
     } satisfies TreasuryDelegationGrant;
   } catch (rawError) {
-    const reason =
-      rawError instanceof Error
-        ? rawError.message
-        : typeof rawError === "string"
-          ? rawError
-          : JSON.stringify(rawError);
+    const reason = errorMessage(rawError);
     throw new Error(`ERC-7715 permission request failed: ${reason}`);
   }
 }

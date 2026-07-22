@@ -12,11 +12,45 @@ export interface ApiErrorShape {
   details?: string;
 }
 
+const ERROR_MESSAGE_KEYS = [
+  "shortMessage",
+  "message",
+  "details",
+  "reason",
+  "error",
+  "cause",
+  "data",
+] as const;
+
+export function errorMessage(error: unknown): string {
+  const seen = new WeakSet<object>();
+
+  function visit(value: unknown, depth: number): string | undefined {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return undefined;
+    seen.add(value);
+
+    for (const key of ERROR_MESSAGE_KEYS) {
+      const candidate = visit((value as Record<string, unknown>)[key], depth + 1);
+      if (candidate) return candidate;
+    }
+
+    const code = (value as Record<string, unknown>).code;
+    if (typeof code === "string" || typeof code === "number") return `Wallet RPC error ${code}`;
+    return undefined;
+  }
+
+  return visit(error, 0) ?? "Unknown wallet or network error";
+}
+
 /**
  * Legacy hook: maps raw wallet/network/policy errors to safe UI strings.
  */
 export function friendlyError(error: unknown) {
-  const raw = error instanceof Error ? error.message : String(error ?? "Unknown error");
+  const raw = errorMessage(error);
   const message = raw.toLowerCase();
 
   if (message.includes("user rejected") || message.includes("user denied")) {

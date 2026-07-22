@@ -1,3 +1,5 @@
+import { canonicalGenLayerAddress } from "@/lib/genlayerAddress";
+
 export interface GenLayerRequest {
   method: string;
   params?: unknown[];
@@ -27,7 +29,7 @@ export async function genlayerRpc<T>(request: GenLayerRequest): Promise<T> {
 export async function readPolicy(policyAddress: string) {
   return genlayerRpc<Record<string, unknown>>({
     method: "gen_call",
-    params: [{ to: policyAddress, method: "get_policy", args: [] }],
+    params: [{ to: canonicalGenLayerAddress(policyAddress), method: "get_policy", args: [] }],
   });
 }
 
@@ -36,7 +38,7 @@ export async function registryPoliciesForOwner(owner: string) {
   if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
   return genlayerRpc<string[]>({
     method: "gen_call",
-    params: [{ to: registry, method: "policies_for_owner", args: [owner] }],
+    params: [{ to: canonicalGenLayerAddress(registry), method: "policies_for_owner", args: [owner] }],
   });
 }
 
@@ -45,7 +47,7 @@ export async function registryPoliciesForAgent(agent: string) {
   if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
   return genlayerRpc<string[]>({
     method: "gen_call",
-    params: [{ to: registry, method: "policies_for_agent", args: [agent] }],
+    params: [{ to: canonicalGenLayerAddress(registry), method: "policies_for_agent", args: [agent] }],
   });
 }
 
@@ -54,27 +56,31 @@ export async function registryGetPolicy(policyAddress: string) {
   if (!registry) throw new Error("NEXT_PUBLIC_GENLAYER_REGISTRY is not configured");
   return genlayerRpc<Record<string, string>>({
     method: "gen_call",
-    params: [{ to: registry, method: "get_policy", args: [policyAddress] }],
+    params: [{
+      to: canonicalGenLayerAddress(registry),
+      method: "get_policy",
+      args: [canonicalGenLayerAddress(policyAddress)],
+    }],
   });
 }
 
 export async function listRequests(policyAddress: string) {
   return genlayerRpc<string[]>({
     method: "gen_call",
-    params: [{ to: policyAddress, method: "list_requests", args: [] }],
+    params: [{ to: canonicalGenLayerAddress(policyAddress), method: "list_requests", args: [] }],
   });
 }
 
 export async function getRequest(policyAddress: string, requestId: string) {
   return genlayerRpc<Record<string, string>>({
     method: "gen_call",
-    params: [{ to: policyAddress, method: "get_request", args: [requestId] }],
+    params: [{ to: canonicalGenLayerAddress(policyAddress), method: "get_request", args: [requestId] }],
   });
 }
 
 export async function writePolicyMethod(policyAddress: string, method: string, args: unknown[]) {
   return genlayerRpc<Record<string, unknown>>({
     method: "gen_write",
-    params: [{ to: policyAddress, method, args }],
+    params: [{ to: canonicalGenLayerAddress(policyAddress), method, args }],
   });
 }

@@ -13,7 +13,7 @@ import {
 } from "@treasury-copilot/shared";
 import { parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
-import { friendlyError } from "@/lib/errors";
+import { errorMessage, friendlyError } from "@/lib/errors";
 import { canonicalJson, hashActionPayload } from "@/lib/ownerActions";
 
 const operatorAddress = process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS as Address | undefined;
@@ -84,7 +84,7 @@ export default function SetupPage() {
           await switchChainAsync({ chainId: selectedChain.chainId });
           switched = true;
         } catch (switchError) {
-          const message = switchError instanceof Error ? switchError.message : String(switchError);
+          const message = errorMessage(switchError);
           throw new Error(`Chain switch failed: ${message}`);
         }
       }
@@ -101,8 +101,8 @@ export default function SetupPage() {
       setGrant(result);
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message || friendlyError(err));
+      const message = friendlyError(err);
+      setError(message);
       console.error("[approveDelegation] ERC-7715 request failed", {
         cause: message,
         switched,
