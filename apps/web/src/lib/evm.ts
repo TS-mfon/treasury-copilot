@@ -3,7 +3,6 @@ import {
   createWalletClient,
   custom,
   formatUnits,
-  getContract,
   http,
   parseUnits,
   type Address,

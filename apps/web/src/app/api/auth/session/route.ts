@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { isAddress, verifyMessage, type Address } from "viem";
-import { ownerAuthCookies, ownerSession, verifyOwnerNonce } from "@/lib/ownerAuth";
+import { ownerAuthCookies, ownerSession, sessionOwner, verifyOwnerNonce } from "@/lib/ownerAuth";
 
 export const runtime = "nodejs";
 
@@ -17,5 +17,15 @@ export async function POST(request: Request) {
     return Response.json({ authenticated: true, owner: body.owner });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Could not create owner session" }, { status: 401 });
+  }
+}
+
+export async function GET() {
+  try {
+    const jar = await cookies();
+    const owner = sessionOwner(jar.get(ownerAuthCookies.SESSION_COOKIE)?.value);
+    return Response.json({ authenticated: true, owner });
+  } catch {
+    return Response.json({ authenticated: false, owner: null }, { status: 401 });
   }
 }

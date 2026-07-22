@@ -1,6 +1,7 @@
-import { formatUnits, isAddress, keccak256, parseUnits, stringToHex, type Address, type Hex } from "viem";
+import { randomUUID } from "node:crypto";
+import { formatUnits, isAddress, keccak256, stringToHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildTreasuryRequestDomain, treasuryRequestTypes, type TreasuryRequestMessage } from "@treasury-copilot/shared";
+import { chainById } from "@treasury-copilot/shared";
 import type { AgentApiKeyClaims } from "@/lib/apiAuth";
 import { genlayerRead, genlayerWrite } from "@/lib/genlayerServer";
 import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
@@ -13,6 +14,7 @@ export interface SpendPayload {
   category: string;
   justification: string;
   requestId?: Hex;
+  idempotencyKey?: string;
 }
 
 export interface PolicyState {
@@ -30,6 +32,7 @@ export interface PolicyState {
   auto_approve_threshold_atto?: string;
   weekly_spent_atto?: string;
   policy_text?: string;
+  policy_nonce?: string;
 }
 
 export interface RegistryBinding {
@@ -55,8 +58,11 @@ export interface RequestState {
   reasoning: string;
   tx_hash: string;
   created_at: string;
+  updated_at?: string;
   execution_status?: string;
   execution_error?: string;
+  execution_claimed_at?: string;
+  finalized?: boolean;
 }
 
 export function platformAccount() {
@@ -74,13 +80,17 @@ export function parseSpendPayload(value: unknown): SpendPayload {
   const justification = body.justification;
   const agent = body.agent ?? body.agent_address;
   const requestId = body.request_id ?? body.requestId;
+  const idempotencyKey = body.idempotency_key ?? body.idempotencyKey;
 
   if (typeof agent !== "string" || !isAddress(agent)) throw new Error("agent_address is required and must be a valid address");
   if (typeof recipient !== "string" || !isAddress(recipient)) throw new Error("Invalid recipient");
   if (typeof amount !== "string" || amount.trim() === "") throw new Error("Invalid amount");
-  if (typeof category !== "string" || category.trim().length < 2) throw new Error("Invalid category");
-  if (typeof justification !== "string" || justification.trim().length < 4) throw new Error("Add a clearer justification");
+  if (typeof category !== "string" || category.trim().length < 2 || category.trim().length > 64) throw new Error("Category must be 2-64 characters");
+  if (typeof justification !== "string" || justification.trim().length < 4 || justification.trim().length > 1200) throw new Error("Justification must be 4-1200 characters");
   if (requestId !== undefined && (typeof requestId !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(requestId))) throw new Error("Invalid request id");
+  if (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))) {
+    throw new Error("idempotency_key must be 8-128 characters using letters, numbers, dot, underscore, colon, or dash");
+  }
 
   return {
     agent: agent as Address,
@@ -89,6 +99,7 @@ export function parseSpendPayload(value: unknown): SpendPayload {
     category: category.trim(),
     justification: justification.trim(),
     requestId: requestId as Hex | undefined,
+    idempotencyKey: idempotencyKey as string | undefined,
   };
 }
 
@@ -113,9 +124,11 @@ export async function assertRegistryBinding(claims: AgentApiKeyClaims) {
   if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
   const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [claims.policy]);
   if (!binding.active) throw new Error("This agent policy is inactive");
+  if (lower(binding.policy) !== claims.policy.toLowerCase()) throw new Error("Registry policy does not match API key");
   if (lower(binding.owner) !== claims.owner.toLowerCase() || lower(binding.agent) !== claims.agent.toLowerCase()) throw new Error("Registry owner or agent does not match API key");
   if (lower(binding.delegated_account) !== claims.delegatedAccount.toLowerCase() || lower(binding.token_address) !== claims.token.toLowerCase()) throw new Error("Registry funding binding does not match API key");
   if (String(binding.chain_id) !== String(claims.chainId)) throw new Error("Registry chain does not match API key");
+  if (binding.token_symbol !== claims.tokenSymbol || Number(binding.token_decimals) !== claims.tokenDecimals) throw new Error("Registry token metadata does not match API key");
   if (Number(binding.api_key_version ?? 1) !== claims.keyVersion) throw new Error("API key has been rotated or revoked");
   return binding;
 }
@@ -141,28 +154,28 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
   assertPolicyMatchesApiKey(policy, claims);
   await assertRegistryBinding(claims);
 
-  const account = platformAccount();
   const amountAtto = amountToUnits(payload.amount, claims.tokenDecimals);
   const requestId = payload.requestId
-    ?? keccak256(stringToHex(`${claims.policy}:${claims.delegatedAccount}:${payload.recipient}:${amountAtto}:${payload.category}:${payload.justification}:${payload.agent}`));
+    ?? keccak256(stringToHex(payload.idempotencyKey
+      ? `${claims.policy}:${claims.keyId}:${payload.idempotencyKey}`
+      : `${claims.policy}:${claims.keyId}:${randomUUID()}`));
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
   const justificationHash = keccak256(stringToHex(payload.justification));
 
-  const signature = await account.signTypedData({
-    domain: buildTreasuryRequestDomain(claims.chainId, claims.policy),
-    types: treasuryRequestTypes,
-    primaryType: "TreasuryRequest",
-    message: {
-      policy: claims.policy,
-      delegatedAccount: claims.delegatedAccount,
-      recipient: payload.recipient,
-      amountAtto,
-      category: payload.category,
-      justificationHash,
-      requestId,
-      deadline,
-    },
-  });
+  if (payload.idempotencyKey) {
+    try {
+      const existing = await readPolicyRequest(claims.policy, requestId);
+      const samePayload =
+        lower(existing.recipient) === payload.recipient.toLowerCase()
+        && existing.amount_atto === amountAtto.toString()
+        && existing.category === payload.category
+        && existing.justification === payload.justification;
+      if (!samePayload) throw new Error("idempotency_key was already used with a different request");
+      return { requestId, policy, requestState: existing, submit: { hash: null, receipt: null }, execution: null, record: null };
+    } catch (error) {
+      if (error instanceof Error && !error.message.toLowerCase().includes("unknown request")) throw error;
+    }
+  }
 
   const submit = await genlayerWrite(claims.policy, "submit_request", [
     payload.recipient,
@@ -170,19 +183,51 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
     payload.category,
     payload.justification,
     justificationHash,
-    signature,
     requestId,
     deadline.toString(),
     claims.agent,
-  ]);
+  ], "finalized");
+  await genlayerWrite(claims.policy, "mark_request_finalized", [requestId]);
   const requestState = await readPolicyRequest(claims.policy, requestId);
 
-  return { requestId, policy, requestState, submit, execution: null, record: null };
+  let execution = null;
+  if (requestState.verdict === "approved" && requestState.finalized) {
+    try {
+      execution = await executeApprovedPolicyRequest(claims.policy, requestId);
+    } catch {
+      // The execution helper records a retryable on-chain failure. Return that
+      // authoritative state instead of hiding an approved request behind a 500.
+    }
+  }
+  return {
+    requestId,
+    policy,
+    requestState: await readPolicyRequest(claims.policy, requestId),
+    submit,
+    execution,
+    record: execution?.record ?? null,
+  };
 }
 
 export async function executeApprovedPolicyRequest(policyAddress: Address, requestId: Hex) {
   const policy = await readPolicyState(policyAddress);
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Approved request has no active ERC-7715 delegation");
+  const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
+  if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
+  const binding = await genlayerRead<RegistryBinding>(registry as Address, "get_policy", [policyAddress]);
+  if (!binding.active) throw new Error("Policy registry binding is inactive");
+  if (
+    lower(binding.policy) !== policyAddress.toLowerCase()
+    || lower(binding.owner) !== lower(policy.owner)
+    || lower(binding.agent) !== lower(policy.authorized_agent)
+    || lower(binding.delegated_account) !== lower(policy.delegated_account)
+    || lower(binding.token_address) !== lower(policy.token_address)
+    || String(binding.chain_id) !== String(policy.evm_chain_id)
+  ) {
+    throw new Error("Finalized registry binding does not match the approved policy");
+  }
+  const request = await readPolicyRequest(policyAddress, requestId);
+  if (!request.finalized) throw new Error("GenLayer request is not finalized for execution");
   await genlayerWrite(policyAddress, "claim_execution", [requestId]);
   const relay = {
     policy: policyAddress,
@@ -200,7 +245,6 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
       amount: "0",
     },
   } as OneShotRelayRequest;
-  const request = await readPolicyRequest(policyAddress, requestId);
   relay.params.recipient = request.recipient as Address;
   relay.params.amount = request.amount_atto;
   let execution;
@@ -216,7 +260,16 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   return { requestId, policy, requestState: await readPolicyRequest(policyAddress, requestId), execution, record };
 }
 
-export function requestToApi(row: RequestState, decimals: number) {
+export function requestToApi(row: RequestState, decimals: number, chainId?: number) {
+  const executionStatus = row.execution_status ?? (row.tx_hash ? "executed" : row.verdict === "approved" ? "approved_pending_execution" : "not_executed");
+  const status = row.tx_hash
+    ? "executed"
+    : row.verdict === "denied"
+      ? "denied"
+      : executionStatus === "ready"
+        ? "approved"
+        : executionStatus;
+  const explorer = chainId ? chainById(chainId)?.explorerUrl : undefined;
   return {
     request_id: row.request_id,
     recipient: row.recipient,
@@ -225,10 +278,14 @@ export function requestToApi(row: RequestState, decimals: number) {
     category: row.category,
     justification: row.justification,
     verdict: row.verdict,
+    status,
     reasoning: row.reasoning,
     tx_hash: row.tx_hash,
-    execution_status: row.execution_status ?? (row.tx_hash ? "executed" : row.verdict === "approved" ? "approved_pending_execution" : "not_executed"),
+    execution_status: executionStatus,
     execution_error: row.execution_error ?? "",
+    execution_claimed_at: row.execution_claimed_at ?? "",
     created_at: row.created_at,
+    updated_at: row.updated_at ?? row.created_at,
+    explorer_url: row.tx_hash && explorer ? `${explorer}/tx/${row.tx_hash}` : null,
   };
 }

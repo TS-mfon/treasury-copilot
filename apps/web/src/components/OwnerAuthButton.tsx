@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LogIn, LogOut, Wallet } from "lucide-react";
 import { useAccount, useConnect, useSignMessage } from "wagmi";
 
@@ -10,10 +10,19 @@ export function OwnerAuthButton() {
   const { signMessageAsync } = useSignMessage();
   const [authenticated, setAuthenticated] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    void fetch("/api/auth/session")
+      .then((response) => response.ok ? response.json() : { authenticated: false })
+      .then((result) => setAuthenticated(Boolean(result.authenticated)))
+      .catch(() => setAuthenticated(false));
+  }, []);
 
   async function login() {
     if (!address) return;
     setBusy(true);
+    setError("");
     try {
       const challengeResponse = await fetch("/api/auth/nonce", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner: address }) });
       const challenge = await challengeResponse.json();
@@ -24,6 +33,8 @@ export function OwnerAuthButton() {
       if (!response.ok) throw new Error(result.error ?? "Could not authenticate wallet");
       setAuthenticated(true);
       window.location.assign("/dashboard");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Wallet authentication failed");
     } finally {
       setBusy(false);
     }
@@ -37,7 +48,7 @@ export function OwnerAuthButton() {
 
   if (!isConnected) {
     const connector = connectors[0];
-    return <button className="inline-flex items-center gap-2 rounded-md border border-outline px-3 py-2 text-sm text-neutral-200" disabled={!connector || isPending} onClick={() => connector && connect({ connector })}><Wallet size={16} /> Connect wallet</button>;
+    return <button title={error || undefined} className="inline-flex items-center gap-2 rounded-md border border-outline px-3 py-2 text-sm text-neutral-200" disabled={!connector || isPending} onClick={() => connector && connect({ connector })}><Wallet size={16} /> Connect wallet</button>;
   }
   if (authenticated) return <button className="inline-flex items-center gap-2 rounded-md border border-outline px-3 py-2 text-sm text-neutral-200" onClick={logout}><LogOut size={16} /> Log out</button>;
   return <button className="inline-flex items-center gap-2 rounded-md bg-purple px-3 py-2 text-sm font-semibold text-black disabled:opacity-50" disabled={busy} onClick={login}><LogIn size={16} /> {busy ? "Signing in…" : "Unlock"}</button>;

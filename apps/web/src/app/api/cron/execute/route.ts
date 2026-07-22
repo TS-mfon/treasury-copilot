@@ -4,7 +4,7 @@ import { executeApprovedPolicyRequest, listPolicyRequests, readPolicyRequest } f
 import { genlayerRead } from "@/lib/genlayerServer";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function authorized(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       const requestIds = await listPolicyRequests(policy);
       for (const rawRequestId of requestIds.slice(-25)) {
         const requestState = await readPolicyRequest(policy, rawRequestId);
-        if (requestState.verdict !== "approved" || requestState.tx_hash || !["ready", "failed", "approved_pending_execution"].includes(requestState.execution_status ?? "")) continue;
+        if (!requestState.finalized || requestState.verdict !== "approved" || requestState.tx_hash || !["ready", "failed", "approved_pending_execution"].includes(requestState.execution_status ?? "")) continue;
         try {
           const result = await executeApprovedPolicyRequest(policy, rawRequestId as Hex);
           completed.push(result.requestId);

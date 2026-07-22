@@ -32,6 +32,7 @@ class TreasuryRegistry(gl.Contract):
     policy_order: DynArray[str]
     owner_index: TreeMap[str, str]
     agent_index: TreeMap[str, str]
+    owner_nonces: TreeMap[str, u256]
 
     def __init__(self):
         self.owner = gl.message.sender_address
@@ -47,7 +48,10 @@ class TreasuryRegistry(gl.Contract):
         token_address: Address,
         token_symbol: str,
         token_decimals: u256,
+        registration_nonce: u256,
     ) -> dict:
+        if gl.message.sender_address != self.owner:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only registry gateway")
         policy_key = _lower(str(policy))
         try:
             existing = self.policies[policy_key].policy
@@ -58,6 +62,8 @@ class TreasuryRegistry(gl.Contract):
 
         owner_key = _lower(str(owner))
         agent_key = _lower(str(agent))
+        if registration_nonce != self._owner_nonce(owner_key):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid owner registration nonce")
         self.policies[policy_key] = RegisteredPolicy(
             owner=owner_key,
             agent=agent_key,
@@ -68,13 +74,28 @@ class TreasuryRegistry(gl.Contract):
             token_symbol=str(token_symbol).upper(),
             token_decimals=token_decimals,
             active=True,
-            created_at="accepted",
+            created_at=str(gl.message_raw["datetime"]),
             api_key_version=u256(1),
         )
         self.policy_order.append(policy_key)
         self.owner_index[owner_key] = self._append_csv(self._read_index(self.owner_index, owner_key), policy_key)
         self.agent_index[agent_key] = self._append_csv(self._read_index(self.agent_index, agent_key), policy_key)
+        self.owner_nonces[owner_key] = registration_nonce + u256(1)
         return self.get_policy(policy_key)
+
+    @gl.public.view
+    def owner_nonce(self, owner: str) -> str:
+        return str(self._owner_nonce(_lower(owner)))
+
+    @gl.public.write
+    def consume_owner_nonce(self, owner: Address, registration_nonce: u256) -> dict:
+        if gl.message.sender_address != self.owner:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only registry gateway")
+        owner_key = _lower(str(owner))
+        if registration_nonce != self._owner_nonce(owner_key):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid owner registration nonce")
+        self.owner_nonces[owner_key] = registration_nonce + u256(1)
+        return {"owner": owner_key, "next_nonce": str(self.owner_nonces[owner_key])}
 
     @gl.public.view
     def get_policy(self, policy: str) -> dict:
@@ -97,7 +118,7 @@ class TreasuryRegistry(gl.Contract):
     def set_policy_active(self, policy: Address, active: bool) -> dict:
         policy_key = _lower(str(policy))
         item = self.policies[policy_key]
-        if gl.message.sender_address != Address(item.owner) and gl.message.sender_address != self.owner:
+        if gl.message.sender_address != self.owner and gl.message.sender_address != Address(item.owner):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner")
         item.active = active
         self.policies[policy_key] = item
@@ -107,7 +128,7 @@ class TreasuryRegistry(gl.Contract):
     def rotate_api_key(self, policy: Address) -> dict:
         policy_key = _lower(str(policy))
         item = self.policies[policy_key]
-        if gl.message.sender_address != Address(item.owner) and gl.message.sender_address != self.owner:
+        if gl.message.sender_address != self.owner and gl.message.sender_address != Address(item.owner):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner")
         item.api_key_version = item.api_key_version + u256(1)
         self.policies[policy_key] = item
@@ -133,6 +154,12 @@ class TreasuryRegistry(gl.Contract):
             return index[key]
         except KeyError:
             return ""
+
+    def _owner_nonce(self, owner: str) -> u256:
+        try:
+            return self.owner_nonces[owner]
+        except KeyError:
+            return u256(0)
 
     def _append_csv(self, existing: str, value: str) -> str:
         if existing == "":

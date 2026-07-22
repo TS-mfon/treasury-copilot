@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { createAccount, createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
@@ -29,7 +31,11 @@ function client() {
   return cachedClient;
 }
 
-export async function genlayerRead<T>(address: Address, functionName: string, args: unknown[] = []) {
+export async function genlayerRead<T>(
+  address: Address,
+  functionName: string,
+  args: unknown[] = [],
+) {
   return await client().readContract({
     address,
     functionName,
@@ -38,7 +44,12 @@ export async function genlayerRead<T>(address: Address, functionName: string, ar
   }) as T;
 }
 
-export async function genlayerWrite(address: Address, functionName: string, args: unknown[] = []) {
+export async function genlayerWrite(
+  address: Address,
+  functionName: string,
+  args: unknown[] = [],
+  finality: "decided" | "finalized" = "finalized",
+) {
   const hash = await client().writeContract({
     account: account(),
     address,
@@ -48,7 +59,7 @@ export async function genlayerWrite(address: Address, functionName: string, args
   }) as Hex;
   const receipt = await client().waitForTransactionReceipt({
     hash: hash as GenLayerHash,
-    status: TransactionStatus.ACCEPTED,
+    status: finality === "finalized" ? TransactionStatus.FINALIZED : TransactionStatus.ACCEPTED,
     retries: 80,
     interval: 3000,
   });
@@ -63,4 +74,46 @@ export async function genlayerWrite(address: Address, functionName: string, args
     throw new Error(`${functionName} failed on GenLayer: ${JSON.stringify(receipt).slice(0, 400)}`);
   }
   return { hash, receipt };
+}
+
+function deployedAddress(receipt: Record<string, unknown>): Address {
+  const data = receipt.data as Record<string, unknown> | undefined;
+  const decoded = receipt.txDataDecoded as Record<string, unknown> | undefined;
+  const value = data?.contract_address
+    ?? data?.contractAddress
+    ?? decoded?.contract_address
+    ?? decoded?.contractAddress;
+  if (typeof value !== "string") throw new Error("GenLayer deployment receipt did not include a contract address");
+  return value as Address;
+}
+
+async function contractSource(filename: string) {
+  const candidates = [
+    path.resolve(process.cwd(), "contracts/genlayer", filename),
+    path.resolve(process.cwd(), "../../contracts/genlayer", filename),
+  ];
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, "utf8");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`Could not load ${filename}: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+export async function deployTreasuryPolicy(args: unknown[]) {
+  const hash = await client().deployContract({
+    account: account(),
+    code: await contractSource("TreasuryPolicy.py"),
+    args: args as never[],
+  }) as Hex;
+  const receipt = await client().waitForTransactionReceipt({
+    hash: hash as GenLayerHash,
+    status: TransactionStatus.FINALIZED,
+    retries: 120,
+    interval: 3000,
+  }) as Record<string, unknown>;
+  return { hash, receipt, address: deployedAddress(receipt) };
 }

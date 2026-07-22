@@ -50,12 +50,6 @@ function viemChain(chainId: string) {
   throw new Error(`unsupported delegated execution chain ${chainId}`);
 }
 
-function normalizeChainId(chainId: unknown): string {
-  const value = typeof chainId === "number" ? String(chainId) : typeof chainId === "string" ? chainId : undefined;
-  if (!value) throw new Error("Missing chain id");
-  return value;
-}
-
 function isXLayerChain(chainId: string) {
   const id = Number(chainId);
   return id === 196 || id === 195 || id === 194;
@@ -65,13 +59,14 @@ async function requireChainCapability(chainId: string) {
   const capabilities = await getCapabilities(chainId).catch((error) => {
     throw new Error(`1Shot capability check failed: ${error instanceof Error ? error.message : String(error)}`);
   });
-  const capabilityValue = capabilities.capabilities ?? capabilities;
-  if (!capabilityValue || typeof capabilityValue !== "string" || capabilityValue.toLowerCase() === "none") {
+  const capabilityValue = capabilities[chainId];
+  if (!capabilityValue || typeof capabilityValue !== "object") {
     throw new Error("1Shot execution is unsupported on this network");
   }
-  if (isXLayerChain(chainId) && !isNativeMessageSupported(capabilities)) {
+  if (isXLayerChain(chainId) && !isNativeMessageSupported(capabilityValue)) {
     throw new Error("1Shot does not support native OKB on X Layer yet");
   }
+  return capabilityValue as Record<string, unknown>;
 }
 
 function isNativeMessageSupported(capabilities: unknown) {
@@ -205,16 +200,16 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
   const delegatedAccount = body.delegated_account ?? body.params.from;
   if (!delegatedAccount || !isAddress(delegatedAccount)) throw new Error("missing delegated account for 7710 execution");
 
-  const [capabilities, feeData] = await Promise.all([
-    getCapabilities(body.chain_id).catch(() => ({} as Record<string, unknown>)),
+  const [capability, feeData] = await Promise.all([
+    requireChainCapability(body.chain_id),
     rpcCall<{ feeCollector?: Address; targetAddress?: Address }>("relayer_getFeeData", {
       chainId: body.chain_id,
       token: body.token,
     }),
   ]);
   const relayerTarget = feeData.targetAddress
-    ?? (capabilities.targetAddress as Address | undefined)
-    ?? (capabilities.relayerTargetAddress as Address | undefined);
+    ?? (capability.targetAddress as Address | undefined)
+    ?? (capability.relayerTargetAddress as Address | undefined);
   if (!relayerTarget || !isAddress(relayerTarget)) throw new Error("1Shot capabilities missing relayer target address");
   const feeCollector = feeData.feeCollector;
   if (!feeCollector || !isAddress(feeCollector)) throw new Error("1Shot fee data missing fee collector");
@@ -245,7 +240,7 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
     context: redelegateResult.permissionContext,
   };
 
-  const delegationChain = formatDelegationChain([redelegatedObj]);
+  const delegationChain = formatDelegationChain([redelegatedObj, parentDelegation]);
   const workTx = {
     to: body.token,
     data: encodeErc20Transfer(body.params.recipient, BigInt(body.params.amount)),

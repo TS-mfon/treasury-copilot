@@ -6,18 +6,6 @@
  * throwing during initialization when a required secret is missing.
  */
 
-let _initialized = false;
-let validatePromise: Promise<ResolvedEnv> | null = null;
-
-const REQUIRED_SECRETS = [
-  "OWNER_SESSION_SECRET",
-  "AGENT_API_KEY_SECRET",
-] as const;
-
-const REQUIRED_VARS = [
-  "GENLAYER_REGISTRY",
-] as const;
-
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value || value.trim() === "") {

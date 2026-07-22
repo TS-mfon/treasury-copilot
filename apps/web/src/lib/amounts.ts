@@ -1,4 +1,4 @@
-import { parseUnits, formatUnits, type Address } from "viem";
+import { formatUnits } from "viem";
 
 export type AmountDisplay = {
   display: string;

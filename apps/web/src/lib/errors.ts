@@ -63,6 +63,36 @@ export function friendlyError(error: unknown) {
   return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw;
 }
 
+function apiCode(message: string) {
+  const value = message.toLowerCase();
+  if (value.includes("agent") && value.includes("match")) return ["agent_mismatch", 403] as const;
+  if (value.includes("bearer") || value.includes("api key")) return ["invalid_api_key", 401] as const;
+  if (value.includes("idempotency")) return ["idempotency_conflict", 409] as const;
+  if (value.includes("amount") || value.includes("decimal")) return ["invalid_amount", 422] as const;
+  if (value.includes("insufficient") || value.includes("balance")) return ["insufficient_balance", 422] as const;
+  if (value.includes("undetermined") || value.includes("validator") || value.includes("consensus")) return ["genlayer_undetermined", 503] as const;
+  if (value.includes("execution permissions") || value.includes("erc-7715") || value.includes("requestexecutionpermissions")) {
+    return ["unsupported_wallet_capability", 422] as const;
+  }
+  if (value.includes("unsupported") && value.includes("chain")) return ["unsupported_chain", 422] as const;
+  if (value.includes("delegation")) return ["delegation_unavailable", 422] as const;
+  if (value.includes("policy") && value.includes("den")) return ["policy_denied", 422] as const;
+  if (value.includes("unauthorized") || value.includes("authentication") || value.includes("session")) return ["unauthorized", 401] as const;
+  return ["request_failed", 400] as const;
+}
+
+export function apiErrorResponse(error: unknown, requestId?: string) {
+  const message = friendlyError(error);
+  const [code, status] = apiCode(message);
+  return Response.json({
+    error: code,
+    message,
+    fields: {},
+    ...(requestId ? { request_id: requestId } : {}),
+    retryable: status >= 500,
+  }, { status });
+}
+
 /* -------------------------------------------------------------------------- */
 
 export const HTTP_STATUS = {
@@ -251,7 +281,7 @@ export function machineError(opts: {
   return { payload, status: opts.status };
 }
 
-export function responseFrom(opts: Parameters<typeof machineError>[0], fallbackStatus = 400) {
+export function responseFrom(opts: Parameters<typeof machineError>[0]) {
   const { status, ...rest } = machineError(opts);
   return Response.json(rest, { status });
 }

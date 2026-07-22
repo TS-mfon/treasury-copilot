@@ -1,35 +1,131 @@
 # Treasury Copilot
 
-Treasury Copilot gives an AI agent bounded spending power without giving it a private key. An owner configures one isolated treasury policy for each agent; the agent sends ordinary HTTPS JSON with an API key; the platform signer creates the GenLayer request and evaluation; only approved requests are executed automatically through 1Shot. Every lifecycle event—request, verdict, execution result, and EVM transaction hash—remains on-chain for full auditability.
+Treasury Copilot gives an autonomous agent bounded spending power without giving the agent a private key. A human connects a wallet, grants a time-bounded ERC-7715 USDC permission to the platform executor, and configures one GenLayer policy per agent. The agent then sends ordinary HTTPS JSON with an API key. The platform signer submits the request to GenLayer, GenLayer reaches consensus on the policy decision, and only finalized approvals may be redeemed through 1Shot.
 
-This README is the developer and operator reference. Deep endpoint schemas live in-app under `/docs`, and this file describes the product model, trust boundaries, funding rails, API, chain support, environment, deployment, and troubleshooting.
+The product is intentionally split into two trust domains:
 
-## Trust model
+- **Human domain:** wallet login, delegation, policy configuration, key rotation, revocation, and audit review.
+- **Agent domain:** HTTP API key, JSON spend requests, status polling, and on-chain history.
 
-The owner controls the policy, API-key lifecycle, funding source, and delegation revocation. The agent cannot modify policy, choose another owner’s funds, or sign blockchain transactions. The platform signer is server-only and performs EIP-712 signing plus GenLayer writes; it never receives custody of funds. GenLayer stores the approval decision and execution lifecycle. The owner’s funding source pays the executor for a valid, approved payout request.
+The agent never signs EIP-712 data, invokes GenLayer directly, manages gas, or receives custody of the human’s funds.
 
-Each binding is `owner + agent wallet + GenLayer policy + chain + asset + funding source`. API claims, submitted `agent_address`, registry state, policy state, delegated account, and asset metadata must all match before any request is accepted or executed. The platform signer/policy/delegation internals are never surfaced in normal UI flows.
+## Status
 
-## Funding rails
+The current release targets:
 
-- **ERC-7715 delegation:** owner grants USDC execution permission to the platform executor. Setup checks wallet capability before calling `wallet_requestExecutionPermissions`, stores the delegation context on GenLayer, and lets 1Shot redeem approved payouts.
-- **Owner-controlled vault:** a per-agent EVM treasury. The owner deposits an exact amount and can withdraw; only the relayer can execute a unique approved request ID. This is the fallback for unsupported wallets.
-- **Native OKB:** not currently exposed. X Layer support is deferred pending 1Shot capability retesting.
+- GenLayer StudioNet for policy deployment and evaluation.
+- Base Sepolia for delegated USDC execution.
+- ERC-7715 periodic ERC-20 delegation only.
+- MetaMask Smart Account capability checks before permission requests.
+- 1Shot ERC-7710 redemption after GenLayer finality.
+- On-chain request history, execution state, and EVM transaction hash recording.
 
-Approved 1Shot executions use gas abstraction and can be paid from USDC. Owners only need native gas for optional wallet setup transactions where their wallet requires it.
+X Layer mainnet (`196`), X Layer testnet (`1952`), native OKB, and other execution chains remain configuration capabilities but are hidden from setup until a live 1Shot capability check confirms they can safely execute the selected asset. No unsupported chain is allowed to create a delegation.
+
+There is no vault fallback in this release. Unsupported ERC-7715 wallets receive an actionable setup error and no funds are moved.
+
+## Architecture
+
+### On-chain contracts
+
+`TreasuryRegistry.py` is the deterministic registry. It stores the binding:
+
+```text
+owner + agent + policy + chain + token + delegated account
+```
+
+It also stores the per-owner registration nonce and API-key version. The registry gateway is the platform GenLayer account. Owner wallet signatures are checked by the server before a gateway write is submitted.
+
+`TreasuryPolicy.py` is one policy contract per owner/agent funding binding. It stores:
+
+- owner and authorized agent;
+- platform execution reporter;
+- delegated account and token;
+- delegation context and serialized delegation;
+- per-request cap, weekly cap, and auto-approval threshold;
+- recipient whitelist;
+- weekly reservation accounting;
+- request verdict, reasoning, timestamps, finality marker, execution lease, failure, and transaction hash.
+
+The policy verifies:
+
+1. The GenLayer transaction sender is the configured platform account.
+2. The `on_behalf_of` agent address.
+3. The active registry binding.
+4. Request deadline and signed justification hash.
+5. Recipient, category, justification, amount, cap, whitelist, and replay rules.
+
+### Server
+
+The Next.js server is the only component that holds the platform private key. It:
+
+1. Verifies the agent API key.
+2. Loads the registry and policy from GenLayer.
+3. Compares every API claim with on-chain binding data.
+4. Converts display amounts using exact integer units.
+5. Signs and submits the GenLayer transaction as the platform account.
+6. Waits for the policy call to reach `FINALIZED`.
+7. Marks the request finalized on-chain.
+8. Attempts 1Shot execution for approved requests.
+9. Records success or failure on-chain.
+
+The cron endpoint is a retry mechanism for requests left in `ready` or `failed` execution states. It is not the source of truth.
+
+### 1Shot
+
+The server reads current relayer capabilities and fee data. It rejects unsupported chains, missing target addresses, missing fee collectors, invalid delegation context, invalid token data, and malformed relayer results. For ERC-7710 execution it:
+
+1. Redelegates the stored MetaMask permission context to the current 1Shot target.
+2. Builds the fee transfer and recipient transfer.
+3. Estimates the fee in the delegated token.
+4. Sends the ERC-7710 bundle.
+5. Polls until a confirmed transaction hash exists.
+6. Records that hash in GenLayer.
+
+No public HTTP route accepts arbitrary recipient/amount/delegation payout payloads. The old unsafe execution route was removed. The standalone relay worker only triggers the authenticated cron endpoint.
+
+## Human setup
+
+1. Open `/setup`.
+2. Connect the owner wallet.
+3. Switch to Base Sepolia.
+4. Confirm the wallet exposes `wallet_getSupportedExecutionPermissions` and the `erc20-token-periodic` permission.
+5. Confirm the wallet is a compatible MetaMask Smart Account.
+6. Enter the agent wallet address.
+7. Enter the weekly delegated USDC amount.
+8. Approve the weekly ERC-7715 permission.
+9. Keep native ETH available for wallet setup or upgrade transactions. The owner may need native gas even though approved 1Shot payouts use delegated USDC.
+10. Configure caps, threshold, policy text, and optional whitelist.
+11. Sign the owner setup intent.
+12. The platform deploys or resumes the matching policy, registers the delegation, and issues an API key.
+13. Copy the API key immediately. It is shown once.
+
+The setup intent is bound to owner, agent, policy placeholder, chain, token, delegation payload, caps, whitelist, policy text, nonce, and deadline. Delegation payload object keys are canonically sorted before hashing so browser and server representations cannot drift.
 
 ## Agent API
 
-All endpoints are under `/api/v1`. Send `Authorization: Bearer ***`. API keys are shown once during owner setup. The agent never needs a wallet library, private key, gas, or GenLayer SDK.
+Base URL:
 
-### POST /api/v1/spend
+```text
+https://YOUR_DOMAIN/api/v1
+```
 
-Submits one spend request. GenLayer evaluates it. Approved requests are claimed, sent to 1Shot, and the resulting EVM transaction hash is written back on-chain.
+Authentication:
 
-**Request**
+```http
+Authorization: Bearer tcp_<signed-payload>.<signature>
+Content-Type: application/json
+```
+
+The API key is an opaque signed credential. It contains immutable claims for owner, agent, policy, delegated account, chain, token, decimals, key ID, and key version. It is not a substitute for on-chain verification. Every API request rechecks the current registry and policy state.
+
+### POST `/api/v1/spend`
+
+Request:
+
 ```json
 {
-  "agent_address": "0xYourRegisteredAgent",
+  "agent_address": "0xRegisteredAgent",
   "recipient": "0xRecipient",
   "amount": "25.00",
   "category": "api_subscription",
@@ -38,167 +134,158 @@ Submits one spend request. GenLayer evaluates it. Approved requests are claimed,
 }
 ```
 
-**Rules**
-- `agent_address` must match the API key claim and the active registry binding.
-- `amount` is a positive decimal string. JavaScript floating-point numbers are not accepted.
-- `idempotency_key` is optional but recommended. Reusing an identical spend digest returns the existing request instead of creating a duplicate.
-- Server converts using the configured token decimals. Responses return both display and raw integer units.
+Rules:
 
-**Response**
+- `agent_address`, `recipient`, and all addresses must be valid EVM addresses.
+- `amount` must be a positive decimal string. Floats, exponent notation, signs, and excess precision are rejected.
+- USDC currently uses 6 decimals. The server returns raw integer units as well as display values.
+- `category` is 2-64 characters.
+- `justification` is 4-1200 characters.
+- `idempotency_key` is optional, 8-128 characters, and restricted to letters, digits, `.`, `_`, `:`, and `-`.
+- Reusing an idempotency key with the same payload returns the recorded request.
+- Reusing it with a different payload returns a conflict.
+
+The request route waits for GenLayer finality. Approved requests immediately attempt execution; the cron worker retries failures. A normal successful response includes:
+
 ```json
 {
   "request_id": "0x...",
-  "agent": "0x...",
-  "recipient": "0x...",
-  "amount": "25.00",
-  "amount_units": "25000000",
-  "token_decimals": 6,
-  "status": "approved",
   "verdict": "approved",
-  "reasoning": "Within auto-approve threshold.",
-  "tx_hash": "0x...",
-  "explorer_url": "https://basescan.org/tx/0x...",
-  "created_at": "2026-07-16T22:10:00.000Z",
-  "updated_at": "2026-07-16T22:10:00.000Z"
-}
-```
-
-### GET /api/v1/balance
-
-Returns the current delegated balance, token metadata, weekly spent, weekly cap, and per-request cap for the authenticated API key binding.
-
-**Response**
-```json
-{
-  "owner": "0x...",
-  "agent": "0x...",
-  "policy": "0x...",
-  "delegated_account": "0x...",
-  "chain_id": 84532,
-  "token": "0x...",
-  "token_symbol": "USDC",
-  "token_decimals": 6,
-  "balance": "412.35",
-  "balance_units": "412350000",
-  "weekly_spent": "50.00",
-  "weekly_spent_units": "50000000",
-  "weekly_cap": "100.00",
-  "weekly_cap_units": "100000000",
-  "per_tx_cap": "25.00",
-  "per_tx_cap_units": "25000000"
-}
-```
-
-### GET /api/v1/history?limit=50
-
-Returns GenLayer request records for the current key binding.
-
-**Response**
-```json
-[
-  {
-    "request_id": "0x...",
-    "recipient": "0x...",
-    "amount": "9.50",
-    "amount_units": "9500000",
-    "category": "api_subscription",
-    "justification": "Invoice #7782",
-    "status": "approved",
-    "verdict": "approved",
-    "reasoning": "Within threshold.",
-    "tx_hash": "0x...",
-    "explorer_url": "https://basescan.org/tx/0x...",
-    "created_at": "2026-07-16T22:00:00.000Z",
-    "updated_at": "2026-07-16T22:00:30.000Z"
-  }
-]
-```
-
-### GET /api/v1/requests/:id
-
-Returns one request by ID, scoped to the authenticated API key.
-
-**Response**
-```json
-{
-  "policy": "0x...",
   "request": {
-    "request_id": "0x...",
-    "agent": "0x...",
-    "recipient": "0x...",
-    "amount": "9.50",
-    "amount_display": "9.50",
-    "token_decimals": 6,
-    "status": "approved",
+    "status": "executed",
+    "amount": "25",
+    "amount_units": "25000000",
+    "execution_status": "executed",
     "tx_hash": "0x...",
-    "explorer_url": "https://basescan.org/tx/0x..."
+    "explorer_url": "https://sepolia.basescan.org/tx/0x..."
+  },
+  "genlayer": {
+    "request_tx_hash": "0x...",
+    "record_execution_tx_hash": "0x..."
   }
 }
 ```
 
-## Request lifecycle
+When a request is approved but 1Shot is temporarily unavailable, the response remains an on-chain approved request with `execution_status: "failed"` and an `execution_error`. It can be retried without creating a second payout.
 
-1. Agent sends `POST /api/v1/spend`.
-2. Auth validates API key, required `agent_address`, registry binding, and policy bounds.
-3. Backend creates/records the GenLayer request and returns `pending`, `approved`, or `denied`.
-4. The platform relay worker claims approved requests, builds a 1Shot transaction, confirms EVM execution, and writes `tx_hash` back on-chain.
-5. History and request endpoints expose lifecycle data from on-chain records. Failed relays remain visible for retry with no duplicate payout.
+### GET `/api/v1/balance`
 
-## Amounts and decimals
+Returns owner, agent, policy, delegated account, token metadata, current delegated token balance, weekly reservation, weekly cap, and per-request cap. Every monetary value has both a display field and an `_units` integer field.
 
-Always send amounts as decimal strings, never floats. The server converts with the token’s configured decimal count. Responses always include both the human-readable display amount and the raw integer units. Reusing a request ID is rejected or returned idempotently.
+### GET `/api/v1/history?limit=50`
 
-## Errors
+Returns the current API key binding’s on-chain request history. Results include request ID, amount, category, justification, verdict, reasoning, finality, execution status, execution error, timestamps, transaction hash, and explorer URL.
 
-All agent endpoints return JSON with stable top-level fields and machine-readable details.
+### GET `/api/v1/requests/:id`
+
+Returns one request only if it belongs to the API key’s current policy binding. Use this endpoint to poll a request after a timeout or relay failure.
+
+### GET `/api/v1/policy`
+
+Returns the current policy state for the API key’s binding. It is read-only for agents.
+
+## Error contract
+
+Errors use this shape:
 
 ```json
 {
-  "error": "insufficient_balance",
-  "message": "Delegated balance is below the requested amount",
-  "fields": { "amount": ["requested 25.00 USDC, available 4.20 USDC"] },
-  "request_id": "abc-123"
+  "error": "agent_mismatch",
+  "message": "Request agent does not match API key",
+  "fields": {},
+  "request_id": "optional-request-id",
+  "retryable": false
 }
 ```
 
-Common error codes:
-- `invalid_api_key`: missing, expired, or revoked key
-- `agent_mismatch`: mismatched `agent_address` or registry binding
-- `insufficient_balance`: delegated amount below requested value
-- `invalid_amount`: negative, malformed, or too many decimals
-- `policy_denied`: approval threshold, cap, or whitelist blocked it
-- `unsupported_wallet_capability`: ERC-7715 not available in owner wallet
-- `chain_capability_missing`: 1Shot cannot execute on requested chain
-- `duplicate_request`: identical spend digest already recorded
+Important codes:
 
-## Owner application
+| Code | Meaning | Retry |
+| --- | --- | --- |
+| `invalid_api_key` | Missing, malformed, expired, or invalid signature | No |
+| `agent_mismatch` | Payload agent differs from key or registry | No |
+| `idempotency_conflict` | Same key used with different payload | No |
+| `invalid_amount` | Invalid decimal or precision | No |
+| `unsupported_chain` | Chain is not enabled for this release | No |
+| `unsupported_wallet_capability` | Owner wallet lacks ERC-7715 capability | No, change wallet |
+| `delegation_unavailable` | Delegation is absent or invalid | After setup repair |
+| `policy_denied` | Caps, whitelist, or policy evaluation denied request | No |
+| `genlayer_undetermined` | Consensus did not finalize | Yes |
+| `insufficient_balance` | Delegated token balance is insufficient | After funding |
+| `request_failed` | Recoverable server, relay, or contract error | Inspect request |
 
-Connect and unlock the owner wallet to create an `httpOnly` signed session. Dashboard, History, Policy, and agent-management pages use that session plus on-chain registry ownership; they never accept an agent API key through the UI. Owners can configure one policy per agent, rotate/revoke keys, update future policy limits, and review the complete on-chain audit trail.
+## Owner authentication
 
-The platform signer, GenLayer policy address, delegation payload, and low-level relay parameters are not presented in ordinary owner flows.
+Wallet login is nonce-based:
 
-## Networks
+1. `/api/auth/nonce` issues a five-minute nonce in an HTTP-only, SameSite cookie.
+2. The wallet signs the human-readable challenge.
+3. `/api/auth/session` verifies the signature and creates a 12-hour HTTP-only session.
+4. Protected owner routes resolve the owner from the session cookie.
 
-GenLayer Studionet is the policy/evaluation network. Supported EVM execution chains: Base Sepolia and Arbitrum Sepolia. X Layer mainnet/testnet is explicitly not exposed in the UI until 1Shot capability is retested and gated.
+High-risk mutations still require a fresh EIP-712 owner action signature with a deadline and on-chain nonce. This includes setup, policy updates, whitelist changes, key rotation, and revocation.
 
-Configure token addresses with environment variables; do not hard-code unverified asset contracts into deployment artifacts.
+## Amounts and safety
+
+Never convert money through JavaScript `Number`, `parseFloat`, or floating-point arithmetic. `parseAmount` rejects exponent notation, negative values, zero, and excess decimal places. `parseUnits`/`formatUnits` are used with the token’s configured decimals.
+
+The policy reserves weekly usage when an approved request is created. A failed execution releases that reservation. A retry reserves it again. A request ID can only be executed once, and an execution lease expires after ten minutes for recovery from a crashed worker.
 
 ## Development
 
-Copy `.env.example` to `.env.local`, then set the server-only signer and secrets. Never expose `AGENT_SIGNER_PRIVATE_KEY`, `AGENT_API_KEY_SECRET`, or `OWNER_SESSION_SECRET` with a `NEXT_PUBLIC_` prefix.
-
 ```bash
 npm install
-npm run typecheck -w apps/web --if-present
-npm run build -w apps/web
-npm run lint -w apps/web --if-present
-forge test --root contracts/evm
-genvm-lint check contracts/genlayer/TreasuryPolicy.py
-genvm-lint check contracts/genlayer/TreasuryRegistry.py
+npm run typecheck
+npm run lint
+npm run test -w apps/web
+npm run test:evm
+/home/sudodave/.cache/uv/archive-v0/FVCAd8-80bX6yHz_/bin/genvm-lint check contracts/genlayer/TreasuryPolicy.py
+/home/sudodave/.cache/uv/archive-v0/FVCAd8-80bX6yHz_/bin/genvm-lint check contracts/genlayer/TreasuryRegistry.py
+npm run build
 ```
 
-Deploy fresh GenLayer policy/registry versions after contract interface changes. The existing deployed single-policy addresses are not a substitute for the per-agent registry required by this product.
+The GenVM typecheck additionally requires `pyright`. The linter warns when the contract’s pinned runner is older than the latest available runner; redeploy only after validating compatibility.
 
-## Legacy API notice
+For manual CLI deployments, do not pass `""` as a string constructor value
+with GenLayer CLI `0.39.2`. It is decoded as integer `0`. Use the explicit
+sentinel `none` for an unset method ID or whitelist; the policy constructor
+treats `none` as an empty whitelist entry.
 
-The legacy `/api/submit-agent-request` path remains present for transitional compatibility. It does not return the validated `/api/v1` response shape and will be removed once callers migrate. Use `/api/v1/spend`, `/api/v1/balance`, `/api/v1/history`, `/api/v1/policy`, and `/api/v1/requests/:id`.
+Agent spend requests use direct GenLayer transaction authentication. The
+platform account signs the GenLayer write, and the policy checks
+`gl.message.sender_address`, `on_behalf_of`, and the registry binding. The
+pinned GenVM runner does not include `eth_account` or `eth_utils`, so the
+contract uses GenLayer's native `Keccak256` instead of web3.py EIP-712
+recovery. Owner setup and owner mutations still use EIP-712 signatures
+verified by the server.
+
+## Deployment sequence
+
+1. Validate both contracts.
+2. Set the GenLayer CLI network to `studionet`.
+3. Import or select the platform account.
+4. Deploy a fresh `TreasuryRegistry.py`.
+5. Record the finalized deployment receipt, execution result, schema, and source.
+6. Update `GENLAYER_REGISTRY` and `NEXT_PUBLIC_GENLAYER_REGISTRY`.
+7. Run three smoke examples: auto-approved request, cap-denied request, and policy-evaluated request.
+8. Confirm each transaction is `FINALIZED` and execution succeeded.
+9. Deploy the Next.js app with the same registry and server-only secrets.
+10. Run authenticated API and browser smoke tests.
+
+See [docs/deployment.md](docs/deployment.md), [docs/api.md](docs/api.md), and the in-app `/docs` page.
+
+The July 22, 2026 StudioNet release uses registry
+`0x84EcD64A17071885951BC15DB8634C766E386294` and validated smoke policy
+`0x252Df8515eE24e1844fFC53DA65f1AfC83d02b70`. Finalized deployment and
+three-request evidence is recorded in `docs/deployment.md`.
+
+## Security checklist
+
+- Rotate the GitHub token if it was ever embedded in a remote URL.
+- Keep `AGENT_SIGNER_PRIVATE_KEY`, `OWNER_SESSION_SECRET`, `AGENT_API_KEY_SECRET`, and `CRON_SECRET` server-only.
+- Do not expose delegation payloads in logs.
+- Use HTTPS in production.
+- Restrict `WEB_APP_URL` and do not use wildcard CORS for relay infrastructure.
+- Monitor GenLayer and 1Shot failures.
+- Revoke the policy and rotate the API key if an agent credential leaks.
+- Redeploy contracts after interface changes; old policies do not have the current nonce, finality, and direct-sender checks.

@@ -35,7 +35,7 @@ export const xLayer = defineChain({
 });
 
 export const xLayerTestnet = defineChain({
-  id: 195,
+  id: 1952,
   name: "X Layer Testnet",
   nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
   rpcUrls: {
@@ -91,7 +91,7 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   xLayerTestnet: {
     key: "xLayerTestnet",
     name: "X Layer Testnet",
-    chainId: 195,
+    chainId: 1952,
     explorerUrl: "https://www.oklink.com/xlayer-test",
     nativeSymbol: "OKB",
     viemChain: xLayerTestnet,
@@ -278,6 +278,20 @@ export const treasuryRequestTypes = {
   ]
 } as const satisfies TypedData;
 
+export const ownerActionTypes = {
+  OwnerAction: [
+    { name: "owner", type: "address" },
+    { name: "action", type: "string" },
+    { name: "policy", type: "address" },
+    { name: "agent", type: "address" },
+    { name: "chainId", type: "uint256" },
+    { name: "token", type: "address" },
+    { name: "payloadHash", type: "bytes32" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const satisfies TypedData;
+
 export interface TreasuryRequestMessage {
   policy: Address;
   delegatedAccount: Address;
@@ -298,5 +312,14 @@ export function buildTreasuryRequestDomain(
     version: "1",
     chainId,
     verifyingContract: policyAddress,
+  } as const;
+}
+
+export function buildOwnerActionDomain(chainId: number, registryAddress: Address) {
+  return {
+    name: "Treasury Copilot Owner",
+    version: "1",
+    chainId,
+    verifyingContract: registryAddress,
   } as const;
 }

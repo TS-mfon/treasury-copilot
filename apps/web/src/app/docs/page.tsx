@@ -47,7 +47,7 @@ export default function DocsPage() {
           <p className="mt-2 text-neutral-400">
             Send the bearer API key issued during owner setup. The key is a stateless signed token encoding owner, agent, policy, chain, token, decimals, and version. Every request validates the key, the claimed agent_address, registry binding, and policy state.
           </p>
-          <pre className="terminal mt-4 overflow-auto p-4 text-xs">Authorization: Bearer tc_***</pre>
+          <pre className="terminal mt-4 overflow-auto p-4 text-xs">Authorization: Bearer tcp_***</pre>
           <p className="mt-3 text-xs text-neutral-500">
             Keys are shown once during setup. Store them securely. Rotation and revocation are owner-only operations in authenticated UI and do not require a new setup ceremony.
           </p>
@@ -56,7 +56,7 @@ export default function DocsPage() {
         <section className="panel rounded-lg p-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold"><Code2 size={18} /> POST /api/v1/spend</h2>
           <p className="mt-2 text-neutral-400">
-            Submits one spend request. GenLayer evaluates it and returns pending, approved, or denied. Approved requests are picked up by the platform relay worker, executed through 1Shot, and written back on-chain. Use an idempotency_key to avoid duplicate processing.
+            Submits one spend request and waits for GenLayer finality. Finalized approvals immediately attempt 1Shot execution; the authenticated relay worker retries requests whose execution failed. Use an idempotency_key to avoid duplicate processing.
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">{spendExample}</pre>
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Request body</h3>
@@ -77,12 +77,17 @@ export default function DocsPage() {
   "amount_units": "25000000",
   "token_decimals": 6,
   "verdict": "approved",
-  "reasoning": "Within auto-approve threshold.",
-  "tx_hash": "0x...",
-  "explorer_url": "https://basescan.org/tx/0x...",
-  "status": "approved",
-  "created_at": "2026-07-16T22:10:00.000Z",
-  "updated_at": "2026-07-16T22:10:00.000Z"
+  "request": {
+    "status": "executed",
+    "reasoning": "Within auto-approve threshold.",
+    "amount": "25",
+    "amount_units": "25000000",
+    "execution_status": "executed",
+    "tx_hash": "0x...",
+    "explorer_url": "https://sepolia.basescan.org/tx/0x...",
+    "created_at": "2026-07-21T12:10:00.000Z",
+    "updated_at": "2026-07-21T12:11:00.000Z"
+  }
 }`}</pre>
         </section>
 
@@ -105,6 +110,27 @@ export default function DocsPage() {
             Returns one request record by ID, scoped to the authenticated API key. Use this endpoint for status polling or to recover the explorer link after submission.
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">{requestExample}</pre>
+        </section>
+
+        <section className="panel rounded-lg p-6">
+          <h2 className="text-xl font-semibold">Lifecycle and polling</h2>
+          <div className="mt-4 grid gap-px overflow-hidden border border-outline bg-outline sm:grid-cols-5">
+            {[
+              ["submitted", "Platform signs and sends the policy request."],
+              ["finalized", "The GenLayer decision is no longer appealable."],
+              ["executing", "The platform holds the on-chain execution lease."],
+              ["failed", "The lease is released and the request can retry."],
+              ["executed", "The confirmed EVM transaction hash is recorded."],
+            ].map(([status, detail]) => (
+              <div key={status} className="bg-paper p-4">
+                <p className="font-mono text-xs text-purple">{status}</p>
+                <p className="mt-2 text-xs leading-5 text-neutral-400">{detail}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 text-sm text-neutral-400">
+            If the spend request times out at the HTTP layer, poll GET /api/v1/requests/:id with the same API key. Do not submit a different idempotency key for the same intended payment.
+          </p>
         </section>
 
         <section className="panel rounded-lg p-6">
@@ -141,6 +167,9 @@ export default function DocsPage() {
           <h2 className="text-xl font-semibold">Trust model</h2>
           <p className="mt-2 text-neutral-400">
             The agent never receives custody and does not need a wallet library or gas. The owner grants bounded token spending to the platform signer. GenLayer verifies the registered agent and policy. Only approved requests are executed through 1Shot, then the EVM transaction hash is written back to GenLayer. Relayer failures leave on-chain records so requests can be retried safely with no duplicate payout risk.
+          </p>
+          <p className="mt-3 text-neutral-400">
+            Current execution support is Base Sepolia USDC. X Layer and other chains remain disabled until the live 1Shot capability response confirms the selected token and transaction mode.
           </p>
         </section>
       </article>

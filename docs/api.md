@@ -1,72 +1,145 @@
-# Treasury Copilot — Agent API Reference
+# Treasury Copilot Agent API
 
-This file is the canonical endpoint-by-endpoint reference for building or reviewing agent integrations. For product overview and trust model, see `README.md`. For in-app developer docs, see `/docs`.
+This is the normative HTTP contract for agents. Agents use JSON over HTTPS and a bearer API key. They do not install `genlayer-js`, MetaMask, viem, or an EVM wallet library.
 
-## Base path
+## 1. Connection
 
-`https://YOUR_DOMAIN/api/v1`
-
-## Auth
-
-Send `Authorization: Bearer tc_***`. The key is issued once during owner setup and encodes owner, agent, policy, chain, token, decimals, and version. Every request validates the key, the submitted `agent_address`, the on-chain registry binding, and the active policy state.
-
-## Endpoints
-
-### POST /api/v1/spend
-
-Submit one spend request.
-
-**Request**
-```json
-{
-  "agent_address": "0xYourRegisteredAgent",
-  "recipient": "0xRecipient",
-  "amount": "25.00",
-  "category": "api_subscription",
-  "justification": "Monthly API invoice INV-4471",
-  "idempotency_key": "billing-4471-2026-07"
-}
+```text
+https://YOUR_DOMAIN/api/v1
 ```
 
-**Success response**
+All requests use:
+
+```http
+Authorization: Bearer tcp_<payload>.<signature>
+Content-Type: application/json
+Accept: application/json
+```
+
+Do not send the key in a URL, query string, log line, or user-visible prompt. The setup page shows each key once. Owners rotate keys from the authenticated dashboard.
+
+## 2. Binding model
+
+The key claims are:
+
 ```json
 {
-  "request_id": "0x...",
+  "type": "agent",
+  "version": 1,
+  "keyId": "uuid",
+  "keyVersion": 1,
+  "owner": "0x...",
   "agent": "0x...",
-  "recipient": "0x...",
-  "amount": "25.00",
-  "amount_units": "25000000",
-  "token_decimals": 6,
-  "status": "approved",
-  "verdict": "approved",
-  "reasoning": "Within auto-approve threshold.",
-  "tx_hash": "0x...",
-  "explorer_url": "https://basescan.org/tx/0x...",
-  "created_at": "2026-07-16T22:10:00.000Z",
-  "updated_at": "2026-07-16T22:10:00.000Z"
+  "policy": "0x...",
+  "delegatedAccount": "0x...",
+  "chainId": 84532,
+  "token": "0x...",
+  "tokenSymbol": "USDC",
+  "tokenDecimals": 6,
+  "issuedAt": 0
 }
 ```
 
-**Error response**
+The server verifies the HMAC signature and then reads the registry. A key is rejected if any of these differ from active on-chain data:
+
+- policy;
+- owner;
+- agent;
+- delegated account;
+- chain;
+- token address;
+- token symbol;
+- token decimals;
+- API-key version;
+- active flag.
+
+The request body must also include `agent_address`, and it must match both the key and registry.
+
+## 3. Spend request
+
+### Request
+
+```http
+POST /api/v1/spend
+```
+
 ```json
 {
-  "error": "insufficient_balance",
-  "message": "Delegated balance is below the requested amount",
-  "fields": { "amount": ["requested 25.00 USDC, available 4.20 USDC"] },
-  "request_id": "abc-123"
+  "agent_address": "0x1111111111111111111111111111111111111111",
+  "recipient": "0x2222222222222222222222222222222222222222",
+  "amount": "25.000000",
+  "category": "software",
+  "justification": "Production API renewal invoice INV-4471",
+  "idempotency_key": "invoice-4471-2026-07"
 }
 ```
 
-**Notes**
-- `amount` is a decimal string; never a float.
-- Duplicate spend digests return the existing request instead of creating a second spend.
-- `status` values: `pending`, `approved`, `denied`, `executing`, `executed`, `execution_failed`.
+Field rules:
 
-### GET /api/v1/balance
+| Field | Required | Rule |
+| --- | --- | --- |
+| `agent_address` | yes | Registered EVM address |
+| `recipient` | yes | EVM address |
+| `amount` | yes | Positive decimal string, USDC precision |
+| `category` | yes | 2-64 characters |
+| `justification` | yes | 4-1200 characters |
+| `idempotency_key` | no | 8-128 safe characters |
+| `request_id` | no | 32-byte hex ID for advanced integrations |
 
-Return delegated balance, weekly spend, cap data, and metadata for the current API key binding.
+`amount: "25.000000"` becomes `amount_units: "25000000"`. `25`, `25.0`, and `25.000000` represent the same amount. `25.0000001`, `1e2`, `-1`, `0`, and JSON numeric values are rejected.
 
-**Response**
+### Response
+
+```json
+{
+  "request_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "verdict": "approved",
+  "reasoning": "Within auto-approve threshold",
+  "request": {
+    "request_id": "0x...",
+    "recipient": "0x...",
+    "amount": "25",
+    "amount_units": "25000000",
+    "category": "software",
+    "justification": "Production API renewal invoice INV-4471",
+    "verdict": "approved",
+    "status": "executed",
+    "execution_status": "executed",
+    "execution_error": "",
+    "tx_hash": "0x...",
+    "explorer_url": "https://sepolia.basescan.org/tx/0x...",
+    "created_at": "2026-07-21T12:00:00.000Z",
+    "updated_at": "2026-07-21T12:01:00.000Z"
+  },
+  "genlayer": {
+    "request_tx_hash": "0x...",
+    "record_execution_tx_hash": "0x..."
+  }
+}
+```
+
+The API waits for GenLayer finality before returning a verdict. An approved request may still have `execution_status: "failed"` when 1Shot is temporarily unavailable. That request remains retryable and visible in history.
+
+## 4. Idempotency
+
+Use an idempotency key for invoices, subscriptions, and any operation that may be retried by a network client.
+
+The server derives a request ID from policy, key ID, and idempotency key. On repeat:
+
+- same key and identical recipient/amount/category/justification: return the existing on-chain request;
+- same key with any changed field: return `idempotency_conflict`;
+- no key: generate a random request ID.
+
+Idempotency is not a replacement for on-chain replay protection. The policy always rejects a duplicate request ID.
+
+## 5. Balance
+
+```http
+GET /api/v1/balance
+```
+
+Example:
+
 ```json
 {
   "owner": "0x...",
@@ -74,85 +147,110 @@ Return delegated balance, weekly spend, cap data, and metadata for the current A
   "policy": "0x...",
   "delegated_account": "0x...",
   "chain_id": 84532,
-  "token": "0x...",
+  "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   "token_symbol": "USDC",
   "token_decimals": 6,
   "balance": "412.35",
   "balance_units": "412350000",
-  "weekly_spent": "50.00",
+  "weekly_spent": "50",
   "weekly_spent_units": "50000000",
-  "weekly_cap": "100.00",
+  "weekly_cap": "100",
   "weekly_cap_units": "100000000",
-  "per_tx_cap": "25.00",
+  "per_tx_cap": "25",
   "per_tx_cap_units": "25000000"
 }
 ```
 
-### GET /api/v1/history?limit=50
+The balance is read from the delegated account’s ERC-20 balance. It is not an authorization decision; the policy caps and active registry binding remain authoritative.
 
-Return on-chain request records for the API key binding.
+## 6. History
 
-**Response**
-```json
-[
-  {
-    "request_id": "0x...",
-    "recipient": "0x...",
-    "amount": "9.50",
-    "amount_units": "9500000",
-    "category": "api_subscription",
-    "justification": "Invoice #7782",
-    "status": "approved",
-    "verdict": "approved",
-    "reasoning": "Within threshold.",
-    "tx_hash": "0x...",
-    "explorer_url": "https://basescan.org/tx/0x...",
-    "created_at": "2026-07-16T22:00:00.000Z",
-    "updated_at": "2026-07-16T22:00:30.000Z"
-  }
-]
+```http
+GET /api/v1/history?limit=50
+GET /api/v1/requests/:request_id
+GET /api/v1/policy
 ```
 
-### GET /api/v1/requests/:id
+History is pulled from GenLayer state. The service does not maintain a separate mutable database as the source of truth.
 
-Return one request by ID. The caller only sees requests matched to their API key.
+Status meanings:
 
-**Response**
+| Status | Meaning |
+| --- | --- |
+| `denied` | Policy or cap rejected the request |
+| `approved` | Finalized approval is ready for execution |
+| `executing` | Execution lease is held by the platform worker |
+| `failed` | Relay failed; retry is allowed after lease release |
+| `executed` | EVM tx hash recorded on-chain |
+
+## 7. Errors
+
+Every error has:
+
 ```json
 {
-  "policy": "0x...",
-  "request": {
-    "request_id": "0x...",
-    "agent": "0x...",
-    "recipient": "0x...",
-    "amount": "9.50",
-    "amount_display": "9.50",
-    "token_decimals": 6,
-    "status": "approved",
-    "tx_hash": "0x...",
-    "explorer_url": "https://basescan.org/tx/0x..."
-  }
+  "error": "invalid_amount",
+  "message": "Amount has too many decimal places for this asset",
+  "fields": {},
+  "request_id": "optional",
+  "retryable": false
 }
 ```
 
-## Decimal handling
+Clients should branch on `error`, not on human message text.
 
-Amounts must be decimal strings with precision bounded by token decimals. The server converts to raw integer units and returns both formats. Never use JavaScript `Number`/`parseFloat` for financial amounts.
+| Error | HTTP | Retry |
+| --- | ---: | --- |
+| `invalid_api_key` | 401 | no |
+| `unauthorized` | 401 | no |
+| `agent_mismatch` | 403 | no |
+| `idempotency_conflict` | 409 | no |
+| `invalid_amount` | 422 | no |
+| `unsupported_chain` | 422 | no |
+| `unsupported_wallet_capability` | 422 | owner action |
+| `policy_denied` | 422 | no |
+| `insufficient_balance` | 422 | after funding |
+| `genlayer_undetermined` | 503 | yes |
+| `delegation_unavailable` | 422 | after setup repair |
+| `request_failed` | 400/500 | inspect state |
 
-## Idempotency
+## 8. Minimal clients
 
-Use `idempotency_key` when possible. If the same spend digest is seen twice, the server returns the existing request with no duplicate payout.
+```bash
+curl -sS "$BASE/api/v1/balance" \
+  -H "Authorization: Bearer $TREASURY_API_KEY"
+```
 
-## Chain support
+```bash
+curl -sS "$BASE/api/v1/spend" \
+  -H "Authorization: Bearer $TREASURY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_address": "0x1111111111111111111111111111111111111111",
+    "recipient": "0x2222222222222222222222222222222222222222",
+    "amount": "2.50",
+    "category": "software",
+    "justification": "Monthly build service invoice",
+    "idempotency_key": "build-2026-07"
+  }'
+```
 
-Active: Base Sepolia, Arbitrum Sepolia. Explorer links are auto-derived from the API key binding.
-
-X Layer is not supported in the current product surface. Revisit only after 1Shot capability testing passes.
-
-## Security
-
-- Always validate `agent_address` against API claims and registry data.
-- Treat API keys as credentials; do not log or expose them in URLs.
-- Owner-facing UI uses `httpOnly` wallet sessions and on-chain ownership checks; no agent API key input is accepted.
-
-Recoverable errors include unsupported wallet RPC, missing capability, insufficient token balance, rejected signing, relayer estimates, reverted transactions, and policy denials.
+```js
+const response = await fetch(`${base}/api/v1/spend`, {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${process.env.TREASURY_API_KEY}`,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({
+    agent_address: process.env.AGENT_ADDRESS,
+    recipient,
+    amount: "2.50",
+    category: "software",
+    justification: "Monthly build service invoice",
+    idempotency_key: "build-2026-07",
+  }),
+});
+const result = await response.json();
+if (!response.ok) throw new Error(`${result.error}: ${result.message}`);
+```

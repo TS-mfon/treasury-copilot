@@ -1,8 +1,9 @@
 import { formatUnits } from "viem";
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { assertPolicyMatchesApiKey, assertRegistryBinding, amountToUnits, readPolicyState } from "@/lib/apiServer";
+import { assertPolicyMatchesApiKey, assertRegistryBinding, readPolicyState } from "@/lib/apiServer";
 import { erc20Abi, chainById } from "@treasury-copilot/shared";
 import { createPublicClient, http } from "viem";
+import { apiErrorResponse } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -41,6 +42,6 @@ export async function GET(request: Request) {
       per_tx_cap_units: policy.per_tx_cap_atto ?? "0",
     });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Balance request failed" }, { status: 400 });
+    return apiErrorResponse(error);
   }
 }

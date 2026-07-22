@@ -12,6 +12,7 @@ body {
   margin: 0;
   min-height: 100vh;
   background: #000000;
+  font-family: var(--font-geist-sans), Arial, sans-serif;
 }
 
 button,
@@ -50,7 +51,7 @@ textarea {
   border-radius: 8px;
   background: #050505;
   color: #d4d4d4;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 .badge {
@@ -64,4 +65,25 @@ textarea {
   font-weight: 700;
   line-height: 1;
   color: #f5f5f5;
+}
+
+.icon-button {
+  display: inline-grid;
+  height: 2.5rem;
+  width: 2.5rem;
+  place-items: center;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  background: #0a0a0a;
+  color: #d4d4d4;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.icon-button:hover {
+  background: #1a1a1a;
+  color: #a78bfa;
+}
+
+::selection {
+  background: rgba(167, 139, 250, 0.3);
 }

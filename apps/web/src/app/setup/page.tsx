@@ -1,31 +1,31 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAccount, useConnect, useSignMessage, useSwitchChain } from "wagmi";
-import { KeyRound, ShieldCheck, WalletCards } from "lucide-react";
-import { isAddress, type Address } from "viem";
+import { useAccount, useConnect, useSignTypedData, useSwitchChain } from "wagmi";
+import { Clipboard, Fuel, KeyRound, ShieldCheck, WalletCards } from "lucide-react";
+import { isAddress, zeroAddress, type Address } from "viem";
 import { Shell } from "@/components/Shell";
-import { SUPPORTED_CHAINS, type SupportedChainKey, type SupportedTokenSymbol } from "@treasury-copilot/shared";
+import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
+import {
+  buildOwnerActionDomain,
+  ownerActionTypes,
+  SUPPORTED_CHAINS,
+} from "@treasury-copilot/shared";
 import { parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
+import { canonicalJson, hashActionPayload } from "@/lib/ownerActions";
 
 const operatorAddress = process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS as Address | undefined;
-const defaultPolicy = process.env.NEXT_PUBLIC_GENLAYER_POLICY ?? "";
-
-function jsonWithBigInt(value: unknown) {
-  return JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item));
-}
 
 export default function SetupPage() {
   const { address, chainId, isConnected } = useAccount();
   const { connect, connectors, error: connectError, isPending: isConnecting } = useConnect();
-  const { signMessageAsync } = useSignMessage();
+  const { signTypedDataAsync } = useSignTypedData();
   const { switchChainAsync } = useSwitchChain();
-  const [chainKey, setChainKey] = useState<SupportedChainKey>("baseSepolia");
-  const [tokenSymbol, setTokenSymbol] = useState<SupportedTokenSymbol>("USDC");
+  const chainKey = "baseSepolia" as const;
+  const tokenSymbol = "USDC" as const;
   const [agentAddress, setAgentAddress] = useState("");
-  const [policyAddress, setPolicyAddress] = useState(defaultPolicy);
   const [weeklyCap, setWeeklyCap] = useState("100");
   const [perTxCap, setPerTxCap] = useState("25");
   const [threshold, setThreshold] = useState("5");
@@ -43,8 +43,7 @@ export default function SetupPage() {
   const availableConnectors = connectors.filter((connector, index, list) => (
     list.findIndex((item) => item.id === connector.id && item.name === connector.name) === index
   ));
-  const preferredConnector = availableConnectors.find((connector) => connector.name.toLowerCase().includes("rabby"))
-    ?? availableConnectors.find((connector) => connector.name.toLowerCase().includes("metaMask".toLowerCase()))
+  const preferredConnector = availableConnectors.find((connector) => connector.name.toLowerCase().includes("metamask"))
     ?? availableConnectors[0];
   const effectiveAgent = agentAddress as Address;
   const platformDelegate = operatorAddress ?? process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS;
@@ -117,49 +116,77 @@ export default function SetupPage() {
     setError("");
     try {
       if (!grant) throw new Error("Approve delegation first");
-      if (!isAddress(policyAddress)) throw new Error("Enter a valid GenLayer policy address");
-      setStatus("Registering delegation payload on GenLayer...");
-      const response = await fetch("/api/register-delegation", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: jsonWithBigInt({
-          policy: policyAddress,
-          chainId: grant.chainId,
-          delegatedAccount: grant.delegatedAccount,
+      if (!address) throw new Error("Owner wallet is not connected");
+      const setupChallenge = await fetch("/api/v1/setup");
+      const challenge = await setupChallenge.json();
+      if (!setupChallenge.ok) throw new Error(challenge.message ?? challenge.error ?? "Could not load setup authorization");
+
+      const serializedDelegation = canonicalJson(grant.raw);
+      const payloadHash = hashActionPayload([
+        effectiveAgent.toLowerCase(),
+        grant.delegatedAccount.toLowerCase(),
+        grant.chainId,
+        grant.token.toLowerCase(),
+        tokenSymbol,
+        grant.permissionContext,
+        serializedDelegation,
+        caps.perTxCapAtto,
+        caps.weeklyCapAtto,
+        caps.thresholdAtto,
+        policyText.trim(),
+        whitelist.trim(),
+      ]);
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
+      const nonce = BigInt(challenge.nonce);
+      setStatus("Confirm the owner authorization. Treasury Copilot will deploy and register the agent policy.");
+      const ownerSignature = await signTypedDataAsync({
+        domain: buildOwnerActionDomain(grant.chainId, challenge.registry as Address),
+        types: ownerActionTypes,
+        primaryType: "OwnerAction",
+        message: {
+          owner: address,
+          action: "setup_agent",
+          policy: zeroAddress,
+          agent: effectiveAgent,
+          chainId: BigInt(grant.chainId),
           token: grant.token,
-          permissionContext: grant.permissionContext,
-          delegationPayload: grant.raw,
-        }),
+          payloadHash,
+          nonce,
+          deadline,
+        },
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Delegation registration failed");
-      const ownerMessage = `Treasury Copilot setup\nowner=${address}\nagent=${effectiveAgent}\npolicy=${policyAddress}\nchain=${grant.chainId}`;
-      const ownerSignature = await signMessageAsync({ message: ownerMessage });
       const setupResponse = await fetch("/api/v1/setup", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: canonicalJson({
           owner: address,
           agent: effectiveAgent,
-          policy: policyAddress,
           delegated_account: grant.delegatedAccount,
           chain_id: grant.chainId,
           token_symbol: tokenSymbol,
-          owner_message: ownerMessage,
+          permission_context: grant.permissionContext,
+          delegation_payload: grant.raw,
+          per_tx_cap: perTxCap,
+          weekly_cap: weeklyCap,
+          auto_approve_threshold: threshold,
+          whitelist,
+          policy_text: policyText,
+          nonce: nonce.toString(),
+          deadline: deadline.toString(),
           owner_signature: ownerSignature,
         }),
       });
       const setup = await setupResponse.json();
       if (!setupResponse.ok) throw new Error(setup.error ?? "API key setup failed");
       setApiKey(setup.agent_api_key);
-      setStatus("Delegation registered and agent API key issued.");
+      setStatus("Agent treasury is ready. Store the API key now; it will not be shown again.");
     } catch (err) {
       setError(friendlyError(err));
     }
   }
 
   return (
-    <Shell>
+    <ProtectedOwnerPage><Shell>
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold text-ink">Setup</h1>
@@ -213,17 +240,11 @@ export default function SetupPage() {
           <div className="mt-4 grid gap-4">
             <label className="grid gap-2 text-sm font-medium">
               Chain
-              <select className="field" value={chainKey} onChange={(event) => setChainKey(event.target.value as SupportedChainKey)}>
-                <option value="baseSepolia">Base Sepolia</option>
-                <option value="arbitrumSepolia">Arbitrum Sepolia</option>
-              </select>
+              <input className="field" value="Base Sepolia" disabled />
             </label>
             <label className="grid gap-2 text-sm font-medium">
               Token
-              <select className="field" value={tokenSymbol} onChange={(event) => setTokenSymbol(event.target.value as SupportedTokenSymbol)}>
-                <option value="USDC">USDC</option>
-                <option value="OKB">OKB</option>
-              </select>
+              <input className="field" value="USDC" disabled />
             </label>
             <label className="grid gap-2 text-sm font-medium">
               Agent wallet address
@@ -239,16 +260,19 @@ export default function SetupPage() {
             disabled={!isConnected || !isAddress(effectiveAgent) || isDelegating}
             onClick={approveDelegation}
           >
-            <WalletCards size={16} /> {isDelegating ? "Delegating..." : "Delegate weekly USDC"}
+            <WalletCards size={16} /> {isDelegating ? "Opening MetaMask..." : "Delegate weekly USDC"}
           </button>
 
           {grant && (
             <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4 text-sm text-success">
               <p className="font-semibold">Delegation ready</p>
-              <p className="mt-2 break-all">Delegated account: {grant.delegatedAccount}</p>
-              <p className="mt-2 break-all">Permission context: {grant.permissionContext}</p>
+              <p className="mt-2 text-neutral-300">MetaMask approved the weekly USDC permission for this agent.</p>
             </div>
           )}
+          <div className="mt-5 flex gap-3 rounded-md border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+            <Fuel className="mt-0.5 shrink-0" size={18} />
+            <p>Keep a small native ETH balance available for wallet account setup or upgrade steps. Approved payouts and relayer fees are charged through the configured USDC permission.</p>
+          </div>
         </section>
 
         <section className="panel rounded-lg p-5">
@@ -264,10 +288,6 @@ export default function SetupPage() {
             </label>
           </div>
           <label className="mt-4 grid gap-2 text-sm font-medium">
-            GenLayer policy address
-            <input className="field" value={policyAddress} onChange={(event) => setPolicyAddress(event.target.value)} placeholder="0x..." />
-          </label>
-          <label className="mt-4 grid gap-2 text-sm font-medium">
             Optional recipient whitelist
             <input className="field" value={whitelist} onChange={(event) => setWhitelist(event.target.value)} placeholder="0xabc...,0xdef..." />
           </label>
@@ -276,27 +296,12 @@ export default function SetupPage() {
             <textarea className="field min-h-32" value={policyText} onChange={(event) => setPolicyText(event.target.value)} />
           </label>
 
-          <details className="mt-6 rounded-md border border-outline bg-paper p-4 text-sm text-neutral-300">
-            <summary className="cursor-pointer font-semibold text-purple">Developer policy arguments</summary>
-            <pre className="mt-3 whitespace-pre-wrap break-all text-xs">{JSON.stringify({
-              authorized_agent: isAddress(effectiveAgent) ? effectiveAgent : "0x...",
-              execution_reporter: operatorAddress ?? "operator env missing",
-              delegated_account: grant?.delegatedAccount ?? "approve delegation first",
-              token_address: token ?? `${tokenSymbol} env missing`,
-              delegation_context: grant?.permissionContext ?? "approve delegation first",
-              evm_chain_id: selectedChain.chainId,
-              ...caps,
-              policy_text: policyText,
-              whitelist_csv: whitelist,
-            }, null, 2)}</pre>
-          </details>
-
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            disabled={!grant || !isAddress(policyAddress)}
+            disabled={!grant || !isAddress(effectiveAgent)}
             onClick={registerDelegation}
           >
-            <ShieldCheck size={16} /> Register delegation and issue API key
+            <ShieldCheck size={16} /> Register delegation
           </button>
 
           {status && <p className="mt-4 rounded-md border border-outline bg-surface-high p-3 text-sm text-neutral-200">{status}</p>}
@@ -304,10 +309,16 @@ export default function SetupPage() {
             <div className="mt-4 rounded-md border border-purple/40 bg-purple/10 p-4 text-sm">
               <div className="mb-2 flex items-center gap-2 font-semibold text-purple"><KeyRound size={15} /> Agent API key</div>
               <pre className="whitespace-pre-wrap break-all font-mono text-xs text-ink">{apiKey}</pre>
+              <button
+                className="mt-3 inline-flex items-center gap-2 rounded-md border border-purple/40 px-3 py-2 text-xs font-semibold text-purple"
+                onClick={() => void navigator.clipboard.writeText(apiKey)}
+              >
+                <Clipboard size={14} /> Copy key
+              </button>
             </div>
           )}
         </section>
       </div>
-    </Shell>
+    </Shell></ProtectedOwnerPage>
   );
 }

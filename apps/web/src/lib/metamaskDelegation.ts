@@ -1,8 +1,9 @@
-import { type Address, type Hex } from "viem";
+import { type Address } from "viem";
 import {
   getSmartAccountsEnvironment,
 } from "@metamask/smart-accounts-kit";
 import {
+  getSupportedExecutionPermissions,
   isValid7702Implementation,
   requestExecutionPermissions,
   type GetGrantedExecutionPermissionsResult,
@@ -10,22 +11,7 @@ import {
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
 
 const WEEK_IN_SECONDS = 7 * 24 * 60 * 60;
-const MIN_METAMASK_VERSION = "13.23.0";
 const DELEGATION_PREFIX = "0xef0100";
-
-function toComparableVersion(version: string): number {
-  const numeric = version
-    .replace(/[^0-9.]/g, "")
-    .split(".")
-    .slice(0, 3)
-    .map(Number);
-  return (numeric[0] ?? 0) * 1_000_000 + (numeric[1] ?? 0) * 1_000 + (numeric[2] ?? 0);
-}
-
-function fail(message: string): never {
-  console.error(`[erc7715] ${message}`);
-  throw new Error(message);
-}
 
 function request<T = unknown>(
   provider: unknown,
@@ -52,6 +38,12 @@ export interface TreasuryDelegationGrant {
   delegationManager: Address;
   delegatedAccount: Address;
   raw: GetGrantedExecutionPermissionsResult[number];
+}
+
+export interface DelegationPreflight {
+  providerVersion: string;
+  permissionType: "erc20-token-periodic";
+  chainId: number;
 }
 
 type MetaMaskProvider = {
@@ -114,6 +106,45 @@ async function ensureSmartAccountUpgrade(ethereum: MetaMaskProvider, owner: Addr
   }
 }
 
+function supportsPeriodicUsdc(value: unknown, chainId: number) {
+  if (!value || typeof value !== "object") return false;
+  const permission = (value as Record<string, unknown>)["erc20-token-periodic"];
+  if (!permission || typeof permission !== "object") return false;
+  const chainIds = (permission as Record<string, unknown>).chainIds;
+  return Array.isArray(chainIds) && chainIds.some((value) => Number(value) === chainId);
+}
+
+export async function preflightWeeklyUsdcDelegation(params: {
+  owner: Address;
+  chainKey: SupportedChainKey;
+}): Promise<DelegationPreflight> {
+  const provider = await resolveMetaMaskProvider();
+  const chain = SUPPORTED_CHAINS[params.chainKey];
+  const providerVersion = await getProviderVersion(provider).catch(() => "unknown");
+
+  let supported: unknown;
+  try {
+    supported = await getSupportedExecutionPermissions(provider as never);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (
+      reason.toLowerCase().includes("does not exist")
+      || reason.toLowerCase().includes("corresponding handler")
+      || reason.toLowerCase().includes("not available")
+    ) {
+      throw new Error("This wallet does not support MetaMask ERC-7715 execution permissions.");
+    }
+    throw new Error(`Could not inspect wallet execution permissions: ${reason}`);
+  }
+
+  if (!supportsPeriodicUsdc(supported, chain.chainId)) {
+    throw new Error(`This wallet does not support erc20-token-periodic permissions on ${chain.name}.`);
+  }
+
+  await ensureSmartAccountUpgrade(provider, params.owner, chain.chainId);
+  return { providerVersion, permissionType: "erc20-token-periodic", chainId: chain.chainId };
+}
+
 export async function requestWeeklyUsdcDelegation(params: {
   owner: Address;
   agent: Address;
@@ -128,14 +159,12 @@ export async function requestWeeklyUsdcDelegation(params: {
   const currentTime = Math.floor(Date.now() / 1000);
   const expiry = currentTime + WEEK_IN_SECONDS;
 
-  console.debug("[erc7715] ERC-7715 request debug", {
-    targetChainId: chain.chainId,
-    installedMetaMaskVersion: await getProviderVersion(ethereumProvider).catch(() => "unknown"),
-  });
+  await preflightWeeklyUsdcDelegation({ owner: params.owner, chainKey: params.chainKey });
 
   try {
     const [grant] = await requestExecutionPermissions(ethereumProvider as never, [
       {
+        from: params.owner,
         chainId: chain.chainId,
         to: params.platformDelegate,
         expiry,

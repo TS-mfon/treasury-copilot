@@ -1,54 +1,112 @@
+"use client";
+
 import Link from "next/link";
-import { Bot, BookOpen, ClipboardList, Gauge, History, Settings, ShieldCheck } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 
-const nav = [
+const publicNav = [
   { href: "/setup", label: "Setup", icon: ShieldCheck },
-  { href: "/dashboard", label: "Dashboard", icon: Gauge },
-  { href: "/history", label: "History", icon: History },
-  { href: "/policy", label: "Policy", icon: Settings },
-  { href: "/agent", label: "Agent", icon: Bot },
+  { href: "/agent", label: "Agent API", icon: Bot },
   { href: "/docs", label: "Docs", icon: BookOpen },
 ];
 
-export function LogoMark({ size = 40 }: { size?: number }) {
-  return (
-    <span
-      className="grid place-items-center rounded-lg border border-outline bg-surface-high text-purple"
-      style={{ height: size, width: size }}
-      aria-hidden="true"
-    >
-      <ClipboardList size={Math.max(18, Math.floor(size * 0.5))} />
-    </span>
-  );
+const ownerNav = [
+  { href: "/dashboard", label: "Dashboard", icon: Gauge },
+  { href: "/history", label: "History", icon: History },
+  { href: "/policy", label: "Policy", icon: Settings },
+];
+
+export function LogoMark({ size = 38 }: { size?: number }) {
+  return <img src="/logo.svg" alt="" width={size} height={size} className="shrink-0" aria-hidden="true" />;
 }
 
 export function Shell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const [authenticated, setAuthenticated] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/auth/session")
+      .then(async (response) => response.ok ? response.json() : { authenticated: false })
+      .then((result) => setAuthenticated(Boolean(result.authenticated)))
+      .catch(() => setAuthenticated(false));
+  }, [pathname]);
+
+  const nav = authenticated
+    ? [publicNav[0], ...ownerNav, ...publicNav.slice(1)]
+    : publicNav;
+
   return (
     <div className="min-h-screen bg-paper text-ink">
-      <header className="sticky top-0 z-20 border-b border-outline bg-surface-low/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-3">
+      <header className="sticky top-0 z-30 border-b border-outline bg-paper/95 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          <Link href="/" className="flex min-w-0 items-center gap-3" onClick={() => setOpen(false)}>
             <LogoMark />
-            <span>
-              <span className="block text-base font-semibold">Treasury Copilot</span>
-              <span className="block text-xs text-neutral-500">Policy-gated execution</span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold">Treasury Copilot</span>
+              <span className="block truncate text-[11px] text-neutral-500">Policy-gated execution</span>
             </span>
           </Link>
-          <nav className="flex items-center gap-1 overflow-x-auto">
-            {nav.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-neutral-300 transition hover:bg-surface-high hover:text-purple"
-              >
-                <item.icon size={16} />
-                <span className="hidden sm:inline">{item.label}</span>
-              </Link>
-            ))}
-            <OwnerAuthButton />
-          </nav>
+
+          <div className="hidden items-center gap-1 lg:flex">
+            <nav className="flex items-center gap-1">
+              {nav.map((item) => {
+                const active = pathname === item.href;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`flex h-10 items-center gap-2 border-b-2 px-3 text-sm font-medium transition ${
+                      active
+                        ? "border-purple text-purple"
+                        : "border-transparent text-neutral-400 hover:text-ink"
+                    }`}
+                  >
+                    <item.icon size={15} />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="ml-2 border-l border-outline pl-3">
+              <OwnerAuthButton />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="icon-button lg:hidden"
+            aria-label={open ? "Close navigation" : "Open navigation"}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? <X size={19} /> : <Menu size={19} />}
+          </button>
         </div>
+
+        {open && (
+          <div className="border-t border-outline bg-surface-low px-4 py-3 lg:hidden">
+            <nav className="grid gap-1">
+              {nav.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
+                    pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
+                  }`}
+                  onClick={() => setOpen(false)}
+                >
+                  <item.icon size={17} />
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+            <div className="mt-3 border-t border-outline pt-3">
+              <OwnerAuthButton />
+            </div>
+          </div>
+        )}
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">{children}</main>
     </div>

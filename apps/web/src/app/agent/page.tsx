@@ -1,84 +1,44 @@
-"use client";
-
-import { useState } from "react";
-import { Bot, KeyRound, Send } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Bot, Braces, KeyRound, ShieldCheck } from "lucide-react";
 import { Shell } from "@/components/Shell";
-import { friendlyError } from "@/lib/errors";
+
+const request = `POST /api/v1/spend
+Authorization: Bearer tcp_***
+Content-Type: application/json
+
+{
+  "agent_address": "0xRegisteredAgent",
+  "recipient": "0xRecipient",
+  "amount": "25.00",
+  "category": "api_subscription",
+  "justification": "Monthly API invoice INV-4471",
+  "idempotency_key": "invoice-4471-2026-07"
+}`;
 
 export default function AgentPage() {
-  const [apiKey, setApiKey] = useState("");
-  const [agentAddress, setAgentAddress] = useState("");
-  const [recipient, setRecipient] = useState("");
-  const [amount, setAmount] = useState("1.00");
-  const [category, setCategory] = useState("api");
-  const [justification, setJustification] = useState("");
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function submit() {
-    setError("");
-    setStatus("");
-    setIsSubmitting(true);
-    try {
-      const response = await fetch("/api/v1/spend", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ agent_address: agentAddress, recipient, amount, category, justification }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "Request failed");
-      setStatus(JSON.stringify(result, null, 2));
-    } catch (err) {
-      setError(friendlyError(err));
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
   return (
     <Shell>
-      <section className="panel rounded-lg p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="badge text-purple">AGENT API</div>
-            <h1 className="mt-3 text-3xl font-semibold text-ink">Submit spend request</h1>
-            <p className="mt-2 max-w-3xl text-neutral-400">
-              Agents only need an API key and JSON. The platform signs the GenLayer request, executes approved payments through 1Shot, and returns the on-chain result.
-            </p>
+      <div className="grid gap-8 lg:grid-cols-12">
+        <section className="lg:col-span-7">
+          <div className="badge text-purple"><Bot size={13} className="mr-1" /> AGENT INTEGRATION</div>
+          <h1 className="mt-4 text-4xl font-semibold text-ink">HTTP in. Policy-gated payment out.</h1>
+          <p className="mt-4 max-w-2xl text-lg leading-8 text-neutral-300">
+            Treasury Copilot agents use an API key and JSON. The platform handles EIP-712 signing, GenLayer submission, finality checks, and 1Shot execution.
+          </p>
+          <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            <div className="border-l-2 border-purple pl-4"><KeyRound className="text-purple" size={18} /><h2 className="mt-3 font-semibold">Authenticate</h2><p className="mt-1 text-sm text-neutral-400">Send the owner-issued bearer key.</p></div>
+            <div className="border-l-2 border-warning pl-4"><Braces className="text-warning" size={18} /><h2 className="mt-3 font-semibold">Submit JSON</h2><p className="mt-1 text-sm text-neutral-400">Include the registered agent address.</p></div>
+            <div className="border-l-2 border-success pl-4"><ShieldCheck className="text-success" size={18} /><h2 className="mt-3 font-semibold">Poll status</h2><p className="mt-1 text-sm text-neutral-400">Read the on-chain verdict and tx hash.</p></div>
           </div>
-          <Bot className="text-purple" />
-        </div>
-
-        <div className="mt-6 grid gap-4">
-          <label className="grid gap-2 text-sm font-medium text-neutral-200">
-            Agent API key
-            <div className="relative">
-              <KeyRound className="absolute left-3 top-3 text-neutral-500" size={16} />
-              <input className="field pl-10" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="tcp_..." />
-            </div>
-          </label>
-          <input className="field" value={agentAddress} onChange={(event) => setAgentAddress(event.target.value)} placeholder="Registered agent wallet address 0x..." />
-          <div className="grid gap-4 md:grid-cols-3">
-            <input className="field" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="Recipient 0x..." />
-            <input className="field" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" />
-            <input className="field" value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Category" />
-          </div>
-          <textarea className="field min-h-32" value={justification} onChange={(event) => setJustification(event.target.value)} placeholder="Specific business reason, invoice, usage note, or payment context" />
-          <button
-            className="inline-flex w-fit items-center gap-2 rounded-md bg-purple px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            disabled={isSubmitting || !apiKey || !agentAddress}
-            onClick={submit}
-          >
-            <Send size={16} /> {isSubmitting ? "Submitting..." : "Submit and execute"}
-          </button>
-          {error && <p className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{error}</p>}
-          {status && <pre className="terminal max-h-[520px] overflow-auto p-4 text-xs">{status}</pre>}
-        </div>
-      </section>
+          <Link href="/docs" className="mt-8 inline-flex items-center gap-2 rounded-md bg-purple px-4 py-3 text-sm font-bold text-black">
+            Open API reference <ArrowRight size={16} />
+          </Link>
+        </section>
+        <section className="terminal overflow-hidden lg:col-span-5">
+          <div className="border-b border-outline px-4 py-3 text-xs font-semibold text-neutral-500">REQUEST EXAMPLE</div>
+          <pre className="overflow-auto p-5 text-xs leading-6 text-neutral-300">{request}</pre>
+        </section>
+      </div>
     </Shell>
   );
 }

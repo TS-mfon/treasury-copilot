@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { assertRegistryBinding, amountToUnits, readPolicyRequest, requestToApi } from "@/lib/apiServer";
+import { assertRegistryBinding, readPolicyRequest, requestToApi } from "@/lib/apiServer";
+import { apiErrorResponse } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -17,15 +18,12 @@ export async function GET(
       return NextResponse.json({ error: "Request not found" }, { status: 404 });
     }
     const decimals = claims.tokenDecimals ?? 6;
-    const formatted = requestToApi(row, decimals);
+    const formatted = requestToApi(row, decimals, claims.chainId);
     return NextResponse.json(
       { policy: claims.policy, request: formatted },
       { status: 200 }
     );
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Request lookup failed" },
-      { status: 400 }
-    );
+    return apiErrorResponse(error);
   }
 }

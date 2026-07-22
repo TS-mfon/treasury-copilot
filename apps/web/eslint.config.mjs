@@ -7,6 +7,9 @@ const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 export default [
   {
+    files: ["src/**/*.{ts,tsx}"],
+  },
+  {
     languageOptions: {
       parser: tsParser,
       parserOptions: {
