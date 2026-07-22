@@ -26,6 +26,7 @@ import {
 } from "@/lib/genlayerServer";
 import { canonicalJson, hashActionPayload, verifyOwnerAction } from "@/lib/ownerActions";
 import { requireOwnerSession } from "@/lib/ownerSession";
+import { assertStoredDelegation, validateDelegationGrant } from "@/lib/delegationValidation";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -130,6 +131,18 @@ export async function POST(request: Request) {
     if (threshold > perTx) throw new Error("Auto-approve threshold cannot exceed the per-request cap");
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
+    const platform = platformAccount().address;
+    const validatedGrant = validateDelegationGrant(body.delegationPayload, {
+      owner,
+      platformDelegate: platform,
+      chainId: body.chainId,
+      token: token.address,
+      weeklyAllowanceAtto: weekly,
+      permissionContext: body.permissionContext,
+    });
+    if (validatedGrant.delegatedAccount.toLowerCase() !== body.delegatedAccount.toLowerCase()) {
+      throw new Error("Delegated account does not match the approved wallet grant");
+    }
     const serializedDelegation = canonicalJson(body.delegationPayload);
     const payloadHash = hashActionPayload([
       body.agent.toLowerCase(),
@@ -166,7 +179,6 @@ export async function POST(request: Request) {
       signature: body.signature,
     });
 
-    const platform = platformAccount().address;
     let policy = await matchingPolicy(owner, body, token.address);
     let deployment: Awaited<ReturnType<typeof deployTreasuryPolicy>> | null = null;
 
@@ -216,12 +228,19 @@ export async function POST(request: Request) {
       ]);
     }
 
-    await genlayerWrite(policy, "register_delegation", [
+    const delegationWrite = await genlayerWrite(policy, "register_delegation", [
       serializedDelegation,
       body.delegatedAccount,
       token.address,
       body.permissionContext,
     ]);
+    const storedPolicy = await readPolicyState(policy);
+    assertStoredDelegation(storedPolicy as Record<string, unknown>, {
+      delegatedAccount: body.delegatedAccount,
+      token: token.address,
+      permissionContext: body.permissionContext,
+      serializedPayload: serializedDelegation,
+    });
 
     const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [policy]);
     const agentApiKey = issueAgentApiKey({
@@ -241,11 +260,14 @@ export async function POST(request: Request) {
       agent_api_key: agentApiKey,
       agent: body.agent,
       owner,
+      policy,
       chain_id: body.chainId,
       chain: chain.name,
       token_symbol: token.symbol,
       token_decimals: token.decimals,
       deployment_tx_hash: deployment?.hash ?? null,
+      delegation_tx_hash: delegationWrite.hash,
+      delegation_registered: true,
     });
   } catch (error) {
     return apiErrorResponse(error);

@@ -32,3 +32,10 @@ test("circular provider errors still return a stable fallback", () => {
   error.cause = error;
   assert.equal(errorMessage(error), "Wallet RPC error 4200");
 });
+
+test("connected MetaMask capability errors are not mislabeled as disconnected", () => {
+  assert.match(
+    friendlyError(new Error("This wallet does not support MetaMask ERC-7715 execution permissions.")),
+    /does not support ERC-7715/,
+  );
+});

@@ -56,15 +56,18 @@ export function friendlyError(error: unknown) {
   if (message.includes("user rejected") || message.includes("user denied")) {
     return "The wallet request was rejected. No changes were made.";
   }
-  if (message.includes("metamask") || message.includes("ethereum")) {
-    return "MetaMask is not available or could not complete the request.";
-  }
   if (
+    message.includes("erc-7715") ||
+    message.includes("execution permissions") ||
     message.includes("wallet_requestexecutionpermissions") ||
+    message.includes("wallet_getsupportedexecutionpermissions") ||
     message.includes("corresponding handler") ||
     message.includes("requestexecutionpermissions")
   ) {
     return "This wallet does not support ERC-7715 execution permissions on the selected chain. Use MetaMask with advanced permissions support, switch chains, or try a wallet that exposes wallet_requestExecutionPermissions.";
+  }
+  if (message.includes("metamask") || message.includes("ethereum")) {
+    return "MetaMask is not available or could not complete the request.";
   }
   if (message.includes("missing usdc address")) {
     return "This chain is missing its USDC configuration. Pick another chain or configure the token address.";
