@@ -1,33 +1,12 @@
-import { type Address } from "viem";
+import { createWalletClient, custom, type Address } from "viem";
 import {
-  getSmartAccountsEnvironment,
-} from "@metamask/smart-accounts-kit";
-import {
-  getSupportedExecutionPermissions,
-  isValid7702Implementation,
-  requestExecutionPermissions,
+  erc7715ProviderActions,
   type GetGrantedExecutionPermissionsResult,
 } from "@metamask/smart-accounts-kit/actions";
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
 import { errorMessage } from "@/lib/errors";
 
 const WEEK_IN_SECONDS = 7 * 24 * 60 * 60;
-const DELEGATION_PREFIX = "0xef0100";
-
-function request<T = unknown>(
-  provider: unknown,
-  payload: { method: string; params?: readonly unknown[] },
-): Promise<T> {
-  if (
-    typeof provider !== "object" ||
-    provider === null ||
-    typeof (provider as { request?: (...args: readonly unknown[]) => Promise<T> }).request !== "function"
-  ) {
-    throw new Error("Invalid provider: request() is not available.");
-  }
-
-  return (provider as { request: (...args: readonly unknown[]) => Promise<T> }).request(payload);
-}
 
 export interface TreasuryDelegationGrant {
   owner: Address;
@@ -50,11 +29,16 @@ export interface DelegationPreflight {
 type MetaMaskProvider = {
   isMetaMask?: unknown;
   providers?: readonly MetaMaskProvider[];
-  request<T = unknown>(args: { method: string; params?: readonly unknown[] }): Promise<T>;
+  request(args: { method: string; params?: readonly unknown[] }): Promise<unknown>;
 } & Record<string, unknown>;
 
-async function resolveMetaMaskProvider(): Promise<MetaMaskProvider> {
-  const ethereum = window.ethereum as MetaMaskProvider | undefined;
+export function resolveMetaMaskProvider(
+  injectedProvider: MetaMaskProvider | undefined =
+    typeof window === "undefined"
+      ? undefined
+      : window.ethereum as MetaMaskProvider | undefined,
+): MetaMaskProvider {
+  const ethereum = injectedProvider;
   if (!ethereum) throw new Error("MetaMask is not installed.");
 
   if (Array.isArray(ethereum.providers)) {
@@ -69,7 +53,7 @@ async function resolveMetaMaskProvider(): Promise<MetaMaskProvider> {
 }
 
 async function getProviderVersion(ethereum: MetaMaskProvider): Promise<string> {
-  const raw = await request<string>(ethereum, { method: "web3_clientVersion", params: [] });
+  const raw = await ethereum.request({ method: "web3_clientVersion", params: [] });
 
   if (typeof raw !== "string") {
     throw new Error("MetaMask did not return a client version string.");
@@ -83,66 +67,39 @@ async function getProviderVersion(ethereum: MetaMaskProvider): Promise<string> {
   return parsedVersion;
 }
 
-async function ensureSmartAccountUpgrade(ethereum: MetaMaskProvider, owner: Address, chainId: number) {
-  const accountCode = (await request<string>(ethereum, { method: "eth_getCode", params: [owner, "latest"] })) as string | undefined;
-  if (!accountCode || accountCode === "0x") {
-    throw new Error("MetaMask advanced permissions require the connected account to be upgraded to a MetaMask smart account. Switch to a smart account and retry.");
-  }
+export function isUnsupportedExecutionPermissionsError(error: unknown) {
+  const seen = new WeakSet<object>();
 
-  const environment = getSmartAccountsEnvironment(chainId, "1.3.0");
-  const expectedImplementation = environment.implementations.EIP7702StatelessDeleGatorImpl;
-  if (!expectedImplementation) throw new Error("Missing MetaMask Smart Account implementation address for this chain.");
-
-  const delegatedAddress = `0x${accountCode.slice(8).toLowerCase()}`;
-  const isValidDelegation =
-    delegatedAddress.length === 42 &&
-    delegatedAddress.slice(0, 10).toLowerCase() === DELEGATION_PREFIX &&
-    delegatedAddress.slice(-40).toLowerCase() === expectedImplementation.replace("0x", "").toLowerCase();
-
-  if (!isValidDelegation) {
-    const upgraded = await isValid7702Implementation({ client: ethereum as never, accountAddress: owner, environment }).catch(() => false);
-    if (!upgraded) {
-      throw new Error(`Connected account ${owner} has not been upgraded to a MetaMask Smart Account. ERC-7715 requests are rejected on this account.`);
+  function inspect(value: unknown, depth = 0): boolean {
+    if (typeof value === "string") {
+      const message = value.toLowerCase();
+      return message.includes("method not found")
+        || message.includes("does not exist")
+        || message.includes("corresponding handler")
+        || message.includes("not available")
+        || message.includes("unsupported method");
     }
-  }
-}
+    if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return false;
+    seen.add(value);
 
-function supportsPeriodicUsdc(value: unknown, chainId: number) {
-  if (!value || typeof value !== "object") return false;
-  const permission = (value as Record<string, unknown>)["erc20-token-periodic"];
-  if (!permission || typeof permission !== "object") return false;
-  const chainIds = (permission as Record<string, unknown>).chainIds;
-  return Array.isArray(chainIds) && chainIds.some((value) => Number(value) === chainId);
+    const record = value as Record<string, unknown>;
+    if (record.code === -32601 || record.code === 4200) return true;
+    return Object.values(record).some((nested) => inspect(nested, depth + 1));
+  }
+
+  return inspect(error);
 }
 
 export async function preflightWeeklyUsdcDelegation(params: {
   owner: Address;
   chainKey: SupportedChainKey;
 }): Promise<DelegationPreflight> {
-  const provider = await resolveMetaMaskProvider();
+  const provider = resolveMetaMaskProvider();
   const chain = SUPPORTED_CHAINS[params.chainKey];
   const providerVersion = await getProviderVersion(provider).catch(() => "unknown");
 
-  let supported: unknown;
-  try {
-    supported = await getSupportedExecutionPermissions(provider as never);
-  } catch (error) {
-    const reason = errorMessage(error);
-    if (
-      reason.toLowerCase().includes("does not exist")
-      || reason.toLowerCase().includes("corresponding handler")
-      || reason.toLowerCase().includes("not available")
-    ) {
-      throw new Error("This wallet does not support MetaMask ERC-7715 execution permissions.");
-    }
-    throw new Error(`Could not inspect wallet execution permissions: ${reason}`);
-  }
-
-  if (!supportsPeriodicUsdc(supported, chain.chainId)) {
-    throw new Error(`This wallet does not support erc20-token-periodic permissions on ${chain.name}.`);
-  }
-
-  await ensureSmartAccountUpgrade(provider, params.owner, chain.chainId);
+  // Capability discovery is intentionally not a gate. MetaMask can support the
+  // permission request even when wallet_getSupportedExecutionPermissions is absent.
   return { providerVersion, permissionType: "erc20-token-periodic", chainId: chain.chainId };
 }
 
@@ -154,16 +111,20 @@ export async function requestWeeklyUsdcDelegation(params: {
   weeklyAllowanceAtto: bigint;
   platformDelegate: Address;
 }) {
-  const ethereumProvider = await resolveMetaMaskProvider();
+  const ethereumProvider = resolveMetaMaskProvider();
   const chain = SUPPORTED_CHAINS[params.chainKey];
   if (chain.tokens.USDC?.kind !== "erc20") throw new Error("ERC-7715 delegation is available only for configured ERC-20 assets");
   const currentTime = Math.floor(Date.now() / 1000);
   const expiry = currentTime + WEEK_IN_SECONDS;
 
   await preflightWeeklyUsdcDelegation({ owner: params.owner, chainKey: params.chainKey });
+  const walletClient = createWalletClient({
+    chain: chain.viemChain,
+    transport: custom(ethereumProvider),
+  }).extend(erc7715ProviderActions());
 
   try {
-    const [grant] = await requestExecutionPermissions(ethereumProvider as never, [
+    const [grant] = await walletClient.requestExecutionPermissions([
       {
         from: params.owner,
         chainId: chain.chainId,
@@ -200,6 +161,11 @@ export async function requestWeeklyUsdcDelegation(params: {
     } satisfies TreasuryDelegationGrant;
   } catch (rawError) {
     const reason = errorMessage(rawError);
+    if (isUnsupportedExecutionPermissionsError(rawError)) {
+      throw new Error(
+        `This MetaMask provider does not expose wallet_requestExecutionPermissions on ${chain.name}. Update MetaMask, enable Smart Account permissions, or use a supported MetaMask account. Details: ${reason}`,
+      );
+    }
     throw new Error(`ERC-7715 permission request failed: ${reason}`);
   }
 }
