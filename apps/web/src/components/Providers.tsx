@@ -3,12 +3,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, WagmiProvider, createConfig } from "wagmi";
 import { injected } from "wagmi/connectors";
-import { arbitrumSepolia, baseSepolia } from "wagmi/chains";
+import { arbitrumSepolia, base, baseSepolia } from "wagmi/chains";
 import { useState } from "react";
 import { xLayer, xLayerTestnet } from "@treasury-copilot/shared";
 
 const config = createConfig({
-  chains: [baseSepolia, arbitrumSepolia, xLayer, xLayerTestnet],
+  chains: [baseSepolia, base, arbitrumSepolia, xLayer, xLayerTestnet],
   connectors: [
     injected({
       shimDisconnect: true,
@@ -18,6 +18,7 @@ const config = createConfig({
   multiInjectedProviderDiscovery: true,
   transports: {
     [baseSepolia.id]: http(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL),
+    [base.id]: http(process.env.NEXT_PUBLIC_BASE_RPC_URL),
     [arbitrumSepolia.id]: http(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL),
     [xLayer.id]: http(process.env.NEXT_PUBLIC_X_LAYER_RPC_URL),
     [xLayerTestnet.id]: http(process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL),

@@ -18,6 +18,7 @@ export function publicClientFor(key: SupportedChainKey) {
   const chain = getViemChain(key);
   const rpcUrl = {
     baseSepolia: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL,
+    base: process.env.NEXT_PUBLIC_BASE_RPC_URL,
     arbitrumSepolia: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL,
     xLayer: process.env.NEXT_PUBLIC_X_LAYER_RPC_URL,
     xLayerTestnet: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL,
@@ -27,7 +28,14 @@ export function publicClientFor(key: SupportedChainKey) {
 
 export async function deployTreasuryClone(key: SupportedChainKey, relayer: Address, token: Address) {
   const chain = getViemChain(key);
-  const factoryAddress = process.env[`NEXT_PUBLIC_${key === "baseSepolia" ? "BASE_SEPOLIA" : "ARBITRUM_SEPOLIA"}_FACTORY`] as Address | undefined;
+  const factoryVariable = {
+    baseSepolia: "NEXT_PUBLIC_BASE_SEPOLIA_FACTORY",
+    base: "NEXT_PUBLIC_BASE_FACTORY",
+    arbitrumSepolia: "NEXT_PUBLIC_ARBITRUM_SEPOLIA_FACTORY",
+    xLayer: "NEXT_PUBLIC_X_LAYER_FACTORY",
+    xLayerTestnet: "NEXT_PUBLIC_X_LAYER_TESTNET_FACTORY",
+  } satisfies Record<SupportedChainKey, string>;
+  const factoryAddress = process.env[factoryVariable[key]] as Address | undefined;
   if (!factoryAddress) throw new Error("Missing treasury factory address for selected chain");
   if (!window.ethereum) throw new Error("MetaMask is required");
 

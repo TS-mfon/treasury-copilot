@@ -3,7 +3,7 @@ import { getSmartAccountsEnvironment } from "@metamask/smart-accounts-kit";
 import { redelegatePermissionContextAction } from "@metamask/smart-accounts-kit/actions";
 import { createWalletClient, encodeFunctionData, http, isAddress, isHex, numberToHex, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arbitrumSepolia, baseSepolia } from "viem/chains";
+import { arbitrumSepolia, base, baseSepolia } from "viem/chains";
 
 const erc20Abi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 
@@ -46,6 +46,7 @@ function platformPrivateKey() {
 
 function viemChain(chainId: string) {
   if (chainId === String(baseSepolia.id)) return baseSepolia;
+  if (chainId === String(base.id)) return base;
   if (chainId === String(arbitrumSepolia.id)) return arbitrumSepolia;
   throw new Error(`unsupported delegated execution chain ${chainId}`);
 }

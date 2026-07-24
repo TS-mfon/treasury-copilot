@@ -15,8 +15,9 @@ The current release targets:
 
 - GenLayer StudioNet for policy deployment and evaluation.
 - Base Sepolia for delegated USDC execution.
+- Base Mainnet is visible in setup but delegation is disabled until 1Shot advertises chain `8453`.
 - ERC-7715 periodic ERC-20 delegation only.
-- MetaMask Smart Account capability checks before permission requests.
+- Sequenced MetaMask chain confirmation and capability diagnostics before permission requests.
 - 1Shot ERC-7710 redemption after GenLayer finality.
 - On-chain request history, execution state, and EVM transaction hash recording.
 
@@ -88,17 +89,18 @@ No public HTTP route accepts arbitrary recipient/amount/delegation payout payloa
 
 1. Open `/setup`.
 2. Connect the owner wallet.
-3. Switch to Base Sepolia.
-4. Confirm the wallet exposes `wallet_getSupportedExecutionPermissions` and the `erc20-token-periodic` permission.
-5. Confirm the wallet is a compatible MetaMask Smart Account.
-6. Enter the agent wallet address.
-7. Enter the weekly delegated USDC amount.
-8. Approve the weekly ERC-7715 permission.
-9. Keep native ETH available for wallet setup or upgrade transactions. The owner may need native gas even though approved 1Shot payouts use delegated USDC.
-10. Configure caps, threshold, policy text, and optional whitelist.
-11. Sign the owner setup intent.
-12. The platform deploys or resumes the matching policy, registers the delegation, and issues an API key.
-13. Copy the API key immediately. It is shown once.
+3. Select Base Sepolia. Base Mainnet remains unavailable while 1Shot returns no capability for chain `8453`.
+4. Treasury Copilot switches MetaMask and confirms `eth_chainId` is `0x14a34`.
+5. Treasury Copilot logs `wallet_getCapabilities` for the connected account and chain. This EIP-5792 diagnostic does not replace the ERC-7715 request because MetaMask does not standardize a `permissions.supported` field in that response.
+6. Enter the agent wallet address and weekly delegated USDC amount.
+7. Approve the direct `wallet_requestExecutionPermissions` request. This follows Siggy Treasury's extended viem wallet-client pattern and does not require an `eth_getCode` or EIP-7702 precheck.
+8. Keep native ETH available for wallet setup or upgrade transactions. The owner may need native gas even though approved 1Shot payouts use delegated USDC.
+9. Configure caps, threshold, policy text, and optional whitelist.
+10. Sign the owner setup intent.
+11. The platform deploys or resumes the matching policy, validates the exact returned grant, registers it on GenLayer, reads it back, and issues an API key.
+12. Copy the API key immediately. It is shown once.
+
+Failures are tagged by step in the browser console and UI: `chain-switch`, `capability-check`, or `permission-request`. A missing diagnostic `wallet_getCapabilities` method does not block the proven direct ERC-7715 request; a missing `wallet_requestExecutionPermissions` method does.
 
 The setup intent is bound to owner, agent, policy placeholder, chain, token, delegation payload, caps, whitelist, policy text, nonce, and deadline. Delegation payload object keys are canonically sorted before hashing so browser and server representations cannot drift.
 

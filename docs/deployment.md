@@ -229,12 +229,18 @@ NEXT_PUBLIC_GENLAYER_REGISTRY
 NEXT_PUBLIC_GENLAYER_RPC_URL=https://studio.genlayer.com/api
 NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL
 NEXT_PUBLIC_BASE_SEPOLIA_USDC=0x036CbD53842c5426634e7929541eC2318f3dCF7e
+NEXT_PUBLIC_BASE_SEPOLIA_TREASURY_OPERATOR_ADDRESS
+NEXT_PUBLIC_BASE_RPC_URL
+NEXT_PUBLIC_BASE_USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+NEXT_PUBLIC_BASE_TREASURY_OPERATOR_ADDRESS
 NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS
 ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
 NEXT_PUBLIC_ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
 ```
 
 The operator address must equal the address derived from `AGENT_SIGNER_PRIVATE_KEY`. The registry address must be the fresh successful deployment.
+
+Base Mainnet configuration is environment-aware but must remain execution-disabled until `relayer_getCapabilities(["8453"])` returns a valid target address, fee collector, and USDC token entry. On July 24, 2026, the live 1Shot endpoint returned an empty capability object for Base Mainnet and a valid USDC capability for Base Sepolia.
 
 Deploy:
 

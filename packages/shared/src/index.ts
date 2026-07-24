@@ -1,7 +1,7 @@
-import { defineChain, type Abi, type Address, type Hex, type TypedData } from "viem";
-import { arbitrumSepolia, baseSepolia } from "viem/chains";
+import { defineChain, type Abi, type Address, type Chain, type Hex, type TypedData } from "viem";
+import { arbitrumSepolia, base, baseSepolia } from "viem/chains";
 
-export type SupportedChainKey = "baseSepolia" | "arbitrumSepolia" | "xLayer" | "xLayerTestnet";
+export type SupportedChainKey = "baseSepolia" | "base" | "arbitrumSepolia" | "xLayer" | "xLayerTestnet";
 export type SupportedTokenSymbol = "USDC" | "OKB";
 
 export interface TokenConfig {
@@ -17,7 +17,7 @@ export interface ChainConfig {
   chainId: number;
   explorerUrl: string;
   nativeSymbol: string;
-  viemChain: typeof baseSepolia | typeof arbitrumSepolia | ReturnType<typeof defineChain>;
+  viemChain: Chain;
   usdcAddress: Address | undefined;
   tokens: Partial<Record<SupportedTokenSymbol, TokenConfig>>;
 }
@@ -61,6 +61,18 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     usdcAddress: process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC_DECIMALS ?? 6)),
+    },
+  },
+  base: {
+    key: "base",
+    name: "Base Mainnet",
+    chainId: base.id,
+    explorerUrl: "https://basescan.org",
+    nativeSymbol: "ETH",
+    viemChain: base,
+    usdcAddress: process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined,
+    tokens: {
+      USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_USDC_DECIMALS ?? 6)),
     },
   },
   arbitrumSepolia: {

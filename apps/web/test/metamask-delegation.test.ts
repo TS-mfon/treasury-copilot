@@ -55,14 +55,22 @@ function rpcGrant() {
   };
 }
 
-test("direct ERC-7715 request succeeds without capability discovery or EIP-7702 code checks", async () => {
+test("direct ERC-7715 request succeeds without supported-permission discovery or EIP-7702 code checks", async () => {
   const methods: string[] = [];
+  let permissionParams: readonly unknown[] | undefined;
   const provider: MockProvider = {
     isMetaMask: true,
-    async request({ method }) {
+    async request({ method, params }) {
       methods.push(method);
+      if (method === "eth_chainId") return "0x14a34";
+      if (method === "wallet_getCapabilities") {
+        return { "0x14a34": { atomic: { status: "supported" } } };
+      }
       if (method === "web3_clientVersion") return "MetaMask/v12.0.0";
-      if (method === "wallet_requestExecutionPermissions") return [rpcGrant()];
+      if (method === "wallet_requestExecutionPermissions") {
+        permissionParams = params;
+        return [rpcGrant()];
+      }
       throw new Error(`Unexpected method ${method}`);
     },
   };
@@ -79,13 +87,24 @@ test("direct ERC-7715 request succeeds without capability discovery or EIP-7702 
   assert.equal(result.owner, owner);
   assert.equal(result.permissionContext, "0x1234");
   assert.equal(result.weeklyAllowanceAtto, "100000000");
-  assert.deepEqual(methods, ["web3_clientVersion", "wallet_requestExecutionPermissions"]);
+  assert.deepEqual(methods, [
+    "eth_chainId",
+    "wallet_getCapabilities",
+    "web3_clientVersion",
+    "wallet_requestExecutionPermissions",
+  ]);
+  assert.equal(
+    ((permissionParams?.[0] as Record<string, unknown>)?.chainId),
+    "0x14a34",
+  );
 });
 
 test("actual wallet_requestExecutionPermissions method absence is actionable", async () => {
   const provider: MockProvider = {
     isMetaMask: true,
     async request({ method }) {
+      if (method === "eth_chainId") return "0x14a34";
+      if (method === "wallet_getCapabilities") return {};
       if (method === "web3_clientVersion") return "MetaMask/v12.0.0";
       throw {
         code: -32601,
@@ -114,6 +133,8 @@ test("user rejection is not classified as unsupported capability", async () => {
   const provider: MockProvider = {
     isMetaMask: true,
     async request({ method }) {
+      if (method === "eth_chainId") return "0x14a34";
+      if (method === "wallet_getCapabilities") return {};
       if (method === "web3_clientVersion") return "MetaMask/v12.0.0";
       throw rejection;
     },
@@ -132,6 +153,67 @@ test("user rejection is not classified as unsupported capability", async () => {
   );
 });
 
+test("chain switch is confirmed before capabilities and permission request", async () => {
+  let currentChain = "0x1";
+  const methods: string[] = [];
+  const provider: MockProvider = {
+    isMetaMask: true,
+    async request({ method, params }) {
+      methods.push(method);
+      if (method === "eth_chainId") return currentChain;
+      if (method === "wallet_switchEthereumChain") {
+        currentChain = (params?.[0] as { chainId: string }).chainId;
+        return null;
+      }
+      if (method === "wallet_getCapabilities") return {};
+      if (method === "web3_clientVersion") return "MetaMask/v12.0.0";
+      if (method === "wallet_requestExecutionPermissions") return [rpcGrant()];
+      throw new Error(`Unexpected method ${method}`);
+    },
+  };
+
+  await withInjectedProvider(provider, () => requestWeeklyUsdcDelegation({
+    owner,
+    agent,
+    chainKey: "baseSepolia",
+    token,
+    weeklyAllowanceAtto: 100_000_000n,
+    platformDelegate: delegate,
+  }));
+
+  const switchIndex = methods.indexOf("wallet_switchEthereumChain");
+  const capabilityIndex = methods.indexOf("wallet_getCapabilities");
+  const permissionIndex = methods.indexOf("wallet_requestExecutionPermissions");
+  assert.ok(switchIndex >= 0);
+  assert.ok(capabilityIndex > switchIndex);
+  assert.ok(permissionIndex > capabilityIndex);
+});
+
+test("explicit permissions.supported false names the selected chain", async () => {
+  const provider: MockProvider = {
+    isMetaMask: true,
+    async request({ method }) {
+      if (method === "eth_chainId") return "0x14a34";
+      if (method === "wallet_getCapabilities") {
+        return { "0x14a34": { permissions: { supported: false } } };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    },
+  };
+
+  await assert.rejects(
+    withInjectedProvider(provider, () => requestWeeklyUsdcDelegation({
+      owner,
+      agent,
+      chainKey: "baseSepolia",
+      token,
+      weeklyAllowanceAtto: 100_000_000n,
+      platformDelegate: delegate,
+    })),
+    /execution permissions are unsupported on Base Sepolia/,
+  );
+});
+
 test("MetaMask is selected from a multi-provider injection", () => {
   const other: MockProvider = { request: async () => null };
   const metamask: MockProvider = { isMetaMask: true, request: async () => null };
@@ -139,4 +221,32 @@ test("MetaMask is selected from a multi-provider injection", () => {
     providers: [other, metamask],
     request: async () => null,
   }), metamask);
+});
+
+test("an explicitly connected provider is used instead of unrelated window.ethereum", async () => {
+  const unrelated: MockProvider = {
+    request: async () => {
+      throw new Error("Unrelated provider must not be called");
+    },
+  };
+  const connected: MockProvider = {
+    isMetaMask: true,
+    async request({ method }) {
+      if (method === "eth_chainId") return "0x14a34";
+      if (method === "wallet_getCapabilities") return {};
+      if (method === "web3_clientVersion") return "MetaMask/v12.0.0";
+      if (method === "wallet_requestExecutionPermissions") return [rpcGrant()];
+      throw new Error(`Unexpected method ${method}`);
+    },
+  };
+
+  await withInjectedProvider(unrelated, () => requestWeeklyUsdcDelegation({
+    owner,
+    agent,
+    chainKey: "baseSepolia",
+    token,
+    weeklyAllowanceAtto: 100_000_000n,
+    platformDelegate: delegate,
+    provider: connected,
+  }));
 });

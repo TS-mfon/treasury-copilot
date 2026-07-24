@@ -57,6 +57,15 @@ export function friendlyError(error: unknown) {
     return "The wallet request was rejected. No changes were made.";
   }
   if (
+    message.includes("capability check failed on")
+    || message.includes("chain switch failed on")
+    || message.includes("permission request failed on")
+    || message.includes("does not expose wallet_requestexecutionpermissions")
+    || message.includes("reports execution permissions are unsupported")
+  ) {
+    return raw.length > 500 ? `${raw.slice(0, 497)}...` : raw;
+  }
+  if (
     message.includes("erc-7715") ||
     message.includes("execution permissions") ||
     message.includes("wallet_requestexecutionpermissions") ||

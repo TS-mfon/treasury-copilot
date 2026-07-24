@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAccount, useConnect, useSignTypedData, useSwitchChain } from "wagmi";
+import { useAccount, useConnect, useSignTypedData } from "wagmi";
 import { Clipboard, Fuel, KeyRound, ShieldCheck, WalletCards } from "lucide-react";
 import { isAddress, zeroAddress, type Address } from "viem";
 import { Shell } from "@/components/Shell";
@@ -10,20 +10,38 @@ import {
   buildOwnerActionDomain,
   ownerActionTypes,
   SUPPORTED_CHAINS,
+  type SupportedChainKey,
 } from "@treasury-copilot/shared";
 import { parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
-import { errorMessage, friendlyError } from "@/lib/errors";
+import { friendlyError } from "@/lib/errors";
 import { canonicalJson, hashActionPayload } from "@/lib/ownerActions";
 
-const operatorAddress = process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS as Address | undefined;
+type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base">;
+
+const delegationChains: Array<{
+  key: DelegationChainKey;
+  executionAvailable: boolean;
+}> = [
+  { key: "baseSepolia", executionAvailable: true },
+  { key: "base", executionAvailable: false },
+];
+
+function operatorForChain(chainKey: DelegationChainKey) {
+  if (chainKey === "base") {
+    return process.env.NEXT_PUBLIC_BASE_TREASURY_OPERATOR_ADDRESS as Address | undefined;
+  }
+  return (
+    process.env.NEXT_PUBLIC_BASE_SEPOLIA_TREASURY_OPERATOR_ADDRESS
+    ?? process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS
+  ) as Address | undefined;
+}
 
 export default function SetupPage() {
-  const { address, chainId, isConnected } = useAccount();
+  const { address, connector, isConnected } = useAccount();
   const { connect, connectors, error: connectError, isPending: isConnecting } = useConnect();
   const { signTypedDataAsync } = useSignTypedData();
-  const { switchChainAsync } = useSwitchChain();
-  const chainKey = "baseSepolia" as const;
+  const [chainKey, setChainKey] = useState<DelegationChainKey>("baseSepolia");
   const tokenSymbol = "USDC" as const;
   const [agentAddress, setAgentAddress] = useState("");
   const [weeklyCap, setWeeklyCap] = useState("100");
@@ -46,7 +64,8 @@ export default function SetupPage() {
   const preferredConnector = availableConnectors.find((connector) => connector.name.toLowerCase().includes("metamask"))
     ?? availableConnectors[0];
   const effectiveAgent = agentAddress as Address;
-  const platformDelegate = operatorAddress ?? process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS;
+  const platformDelegate = operatorForChain(chainKey);
+  const executionAvailable = delegationChains.find((chain) => chain.key === chainKey)?.executionAvailable === true;
 
   const caps = useMemo(() => ({
     perTxCapAtto: parseTokenAmount(perTxCap || "0", tokenConfig?.decimals ?? 6).toString(),
@@ -67,8 +86,10 @@ export default function SetupPage() {
   async function approveDelegation() {
     setError("");
     setIsDelegating(true);
-    let switched = false;
     try {
+      if (!executionAvailable) {
+        throw new Error(`${selectedChain.name} automatic execution is unavailable because 1Shot does not currently advertise chain ${selectedChain.chainId}.`);
+      }
       if (!address) throw new Error("Connect MetaMask first");
       if (!platformDelegate || !isAddress(platformDelegate)) throw new Error("Platform signer is not configured");
       if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent address");
@@ -77,19 +98,10 @@ export default function SetupPage() {
       const ownerAddress = address;
       const tokenAddress = token;
       const weeklyAllowanceAtto = parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6);
+      const walletProvider = await connector?.getProvider();
+      if (!walletProvider) throw new Error("The connected MetaMask provider is unavailable. Reconnect the wallet and retry.");
 
-      if (chainId && Number(chainId) !== selectedChain.chainId) {
-        setStatus(`Switching to ${selectedChain.name} before approval...`);
-        try {
-          await switchChainAsync({ chainId: selectedChain.chainId });
-          switched = true;
-        } catch (switchError) {
-          const message = errorMessage(switchError);
-          throw new Error(`Chain switch failed: ${message}`);
-        }
-      }
-
-      setStatus(`Opening wallet permission request for weekly ${tokenSymbol} delegation...`);
+      setStatus(`Confirming ${selectedChain.name}, inspecting wallet capabilities, then opening the permission request...`);
       const result = await requestWeeklyUsdcDelegation({
         owner: ownerAddress,
         agent: effectiveAgent,
@@ -97,6 +109,7 @@ export default function SetupPage() {
         token: tokenAddress,
         weeklyAllowanceAtto,
         platformDelegate: platformDelegate as Address,
+        provider: walletProvider,
       });
       setGrant(result);
       setStatus("Delegation approved. Register it on the GenLayer policy so approved requests can execute through 1Shot.");
@@ -105,7 +118,9 @@ export default function SetupPage() {
       setError(message);
       console.error("[approveDelegation] ERC-7715 request failed", {
         cause: message,
-        switched,
+        chain: selectedChain.name,
+        chainId: selectedChain.chainId,
+        raw: err,
       });
     } finally {
       setIsDelegating(false);
@@ -240,8 +255,28 @@ export default function SetupPage() {
           <div className="mt-4 grid gap-4">
             <label className="grid gap-2 text-sm font-medium">
               Chain
-              <input className="field" value="Base Sepolia" disabled />
+              <select
+                className="field"
+                value={chainKey}
+                onChange={(event) => {
+                  setChainKey(event.target.value as DelegationChainKey);
+                  setGrant(null);
+                  setError("");
+                  setStatus("");
+                }}
+              >
+                {delegationChains.map(({ key, executionAvailable: available }) => (
+                  <option key={key} value={key}>
+                    {SUPPORTED_CHAINS[key].name}{available ? "" : " - execution unavailable"}
+                  </option>
+                ))}
+              </select>
             </label>
+            {!executionAvailable && (
+              <p className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
+                1Shot does not currently advertise Base Mainnet (8453), so Treasury Copilot will not create a delegation that cannot be executed.
+              </p>
+            )}
             <label className="grid gap-2 text-sm font-medium">
               Token
               <input className="field" value="USDC" disabled />
@@ -257,7 +292,7 @@ export default function SetupPage() {
           </div>
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-purple px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            disabled={!isConnected || !isAddress(effectiveAgent) || isDelegating}
+            disabled={!executionAvailable || !isConnected || !isAddress(effectiveAgent) || isDelegating}
             onClick={approveDelegation}
           >
             <WalletCards size={16} /> {isDelegating ? "Opening MetaMask..." : "Delegate weekly USDC"}
