@@ -49,6 +49,26 @@ test("agent API key tampering fails closed", () => {
   assert.throws(() => verifyAgentApiKey(`${key.slice(0, -1)}x`), /Invalid agent API key signature/);
 });
 
+test("each API key issuance has a unique key id for the bound agent policy", () => {
+  const claims = {
+    keyVersion: 1,
+    owner: account.address,
+    agent: agent.address,
+    policy: policy.address,
+    delegatedAccount: account.address,
+    chainId: 84532,
+    token: token.address,
+    tokenSymbol: "USDC",
+    tokenDecimals: 6,
+    issuedAt: 1_800_000_000,
+  };
+  const first = issueAgentApiKey({ ...claims, keyId: crypto.randomUUID() });
+  const second = issueAgentApiKey({ ...claims, keyId: crypto.randomUUID() });
+
+  assert.notEqual(first, second);
+  assert.notEqual(verifyAgentApiKey(first).keyId, verifyAgentApiKey(second).keyId);
+});
+
 test("owner nonce and session tokens are bound and tamper resistant", () => {
   const challenge = ownerNonce(account.address);
   assert.doesNotThrow(() => verifyOwnerNonce(challenge.token, account.address, challenge.nonce));

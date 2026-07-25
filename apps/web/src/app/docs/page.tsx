@@ -49,7 +49,7 @@ export default function DocsPage() {
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">Authorization: Bearer tcp_***</pre>
           <p className="mt-3 text-xs text-neutral-500">
-            Keys are shown once during setup. Store them securely. Rotation and revocation are owner-only operations in authenticated UI and do not require a new setup ceremony.
+            The MetaMask permission does not create the key. A fresh unique key is issued only after the GenLayer policy and delegation are finalized, registered, and read back successfully. Keys are shown once during setup. Store them securely. Rotation increments the on-chain key version and invalidates older keys; revocation deactivates the policy binding.
           </p>
         </section>
 

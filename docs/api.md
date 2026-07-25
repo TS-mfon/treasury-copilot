@@ -18,7 +18,44 @@ Accept: application/json
 
 Do not send the key in a URL, query string, log line, or user-visible prompt. The setup page shows each key once. Owners rotate keys from the authenticated dashboard.
 
-## 2. Binding model
+## 2. API key issuance
+
+An API key is not created when MetaMask grants the ERC-7715 permission. The permission is only the funding authorization. Key issuance happens after the owner clicks **Register delegation** and every setup stage succeeds:
+
+1. Verify the authenticated owner session.
+2. Verify the fresh EIP-712 setup authorization.
+3. Validate that the MetaMask grant exactly matches owner, platform delegate, chain, token, weekly amount, and permission context.
+4. Deploy or update the agent's GenLayer policy.
+5. Register the owner-agent-policy-funding binding in `TreasuryRegistry`.
+6. Store the serialized delegation and permission context in the policy.
+7. Read the policy and registry back from GenLayer and verify the stored values.
+8. Generate a fresh UUID key ID and issue the signed `tcp_` bearer credential.
+
+If any contract deployment, registration, finality, execution, or readback check fails, the endpoint returns an error and does not issue a key.
+
+Successful setup returns:
+
+```json
+{
+  "agent_api_key": "tcp_<payload>.<signature>",
+  "agent": "0x...",
+  "owner": "0x...",
+  "policy": "0x...",
+  "chain_id": 84532,
+  "chain": "Base Sepolia",
+  "token_symbol": "USDC",
+  "token_decimals": 6,
+  "deployment_tx_hash": "0x...",
+  "delegation_tx_hash": "0x...",
+  "delegation_registered": true
+}
+```
+
+The setup page displays `agent_api_key` once. A new agent/policy setup receives a distinct key. Rotating a key increments the registry's on-chain `api_key_version` and issues another unique key ID; all keys with the previous version then fail registry validation. Revoking a key deactivates the policy binding and issues no replacement.
+
+Treat the entire `tcp_` value as a secret bearer credential. Its payload is signed for integrity, not encrypted.
+
+## 3. Binding model
 
 The key claims are:
 
@@ -55,7 +92,7 @@ The server verifies the HMAC signature and then reads the registry. A key is rej
 
 The request body must also include `agent_address`, and it must match both the key and registry.
 
-## 3. Spend request
+## 4. Spend request
 
 ### Request
 
@@ -120,7 +157,7 @@ Field rules:
 
 The API waits for GenLayer finality before returning a verdict. An approved request may still have `execution_status: "failed"` when 1Shot is temporarily unavailable. That request remains retryable and visible in history.
 
-## 4. Idempotency
+## 5. Idempotency
 
 Use an idempotency key for invoices, subscriptions, and any operation that may be retried by a network client.
 
@@ -132,7 +169,7 @@ The server derives a request ID from policy, key ID, and idempotency key. On rep
 
 Idempotency is not a replacement for on-chain replay protection. The policy always rejects a duplicate request ID.
 
-## 5. Balance
+## 6. Balance
 
 ```http
 GET /api/v1/balance
@@ -163,7 +200,7 @@ Example:
 
 The balance is read from the delegated account’s ERC-20 balance. It is not an authorization decision; the policy caps and active registry binding remain authoritative.
 
-## 6. History
+## 7. History
 
 ```http
 GET /api/v1/history?limit=50
@@ -183,7 +220,7 @@ Status meanings:
 | `failed` | Relay failed; retry is allowed after lease release |
 | `executed` | EVM tx hash recorded on-chain |
 
-## 7. Errors
+## 8. Errors
 
 Every error has:
 
@@ -214,7 +251,7 @@ Clients should branch on `error`, not on human message text.
 | `delegation_unavailable` | 422 | after setup repair |
 | `request_failed` | 400/500 | inspect state |
 
-## 8. Minimal clients
+## 9. Minimal clients
 
 ```bash
 curl -sS "$BASE/api/v1/balance" \
