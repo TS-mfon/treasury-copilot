@@ -92,19 +92,29 @@ export function issueAgentApiKey(claims: Omit<AgentApiKeyClaims, "type" | "versi
 }
 
 export function verifyAgentApiKey(token: string): AgentApiKeyClaims {
-  const normalized = token.trim();
-  if (!normalized.startsWith("tcp_")) throw new Error("Missing agent API key");
-  const [payload, signature] = normalized.slice(4).split(".");
-  if (!payload || !signature) throw new Error("Malformed agent API key");
-  const expected = signPayload(payload);
-  if (!safeEqual(signature, expected)) throw new Error("Invalid agent API key signature");
-  const decoded = JSON.parse(base64UrlDecode(payload)) as Record<string, unknown>;
-  return normalizeClaims(decoded);
+  try {
+    const normalized = token.trim();
+    if (!normalized.startsWith("tcp_")) throw new Error("Missing agent API key");
+    const parts = normalized.slice(4).split(".");
+    if (parts.length !== 2) throw new Error("Malformed agent API key");
+    const [payload, signature] = parts;
+    if (!payload || !signature) throw new Error("Malformed agent API key");
+    const expected = signPayload(payload);
+    if (!safeEqual(signature, expected)) throw new Error("Invalid agent API key signature");
+    const decoded = JSON.parse(base64UrlDecode(payload)) as Record<string, unknown>;
+    return normalizeClaims(decoded);
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes("api key")) throw error;
+    throw new Error("Invalid agent API key");
+  }
 }
 
 export function bearerToken(request: Request) {
-  const header = request.headers.get("authorization") ?? "";
-  const [scheme, value] = header.split(/\s+/);
-  if (scheme?.toLowerCase() !== "bearer" || !value) throw new Error("Authorization bearer token required");
+  const header = request.headers.get("authorization")?.trim() ?? "";
+  const parts = header.split(/\s+/);
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer" || !parts[1]) {
+    throw new Error("Authorization bearer token required");
+  }
+  const value = parts[1];
   return value;
 }

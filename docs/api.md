@@ -2,6 +2,48 @@
 
 This is the normative HTTP contract for agents. Agents use JSON over HTTPS and a bearer API key. They do not install `genlayer-js`, MetaMask, viem, or an EVM wallet library.
 
+## 0. Five-minute quickstart
+
+You need two values from the human owner:
+
+```bash
+export TREASURY_API_KEY="tcp_..."
+export AGENT_ADDRESS="0xYourRegisteredAgentAddress"
+export TREASURY_API_BASE="https://treasury-copilot-genjury.vercel.app/api/v1"
+```
+
+The key is bound to exactly one owner, agent, GenLayer policy, delegated
+account, chain, and token. It cannot be reused for another treasury.
+
+Verify the binding and available balance:
+
+```bash
+curl -sS "$TREASURY_API_BASE/balance" \
+  -H "Authorization: Bearer $TREASURY_API_KEY" \
+  -H "Accept: application/json"
+```
+
+Submit a request with a stable idempotency key:
+
+```bash
+curl -sS "$TREASURY_API_BASE/spend" \
+  -H "Authorization: Bearer $TREASURY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d "{
+    \"agent_address\": \"$AGENT_ADDRESS\",
+    \"recipient\": \"0xRecipientAddress\",
+    \"amount\": \"2.50\",
+    \"category\": \"api_subscription\",
+    \"justification\": \"Monthly model API invoice INV-4471\",
+    \"idempotency_key\": \"invoice-4471-2026-07\"
+  }"
+```
+
+Save the returned `request_id`. After an ambiguous timeout, retry with the same
+idempotency key or poll `GET /requests/:request_id`. Never create a new
+idempotency key for the same intended payment.
+
 ## 1. Connection
 
 ```text
@@ -17,6 +59,18 @@ Accept: application/json
 ```
 
 Do not send the key in a URL, query string, log line, or user-visible prompt. The setup page shows each key once. Owners rotate keys from the authenticated dashboard.
+
+### Who signs transactions
+
+The API key authenticates and identifies the agent, but it never signs a
+GenLayer transaction. Every state-changing GenLayer call is signed server-side
+by the configured platform signer. Before a write, the server verifies the key,
+body `agent_address`, active registry binding, policy funding fields, and that
+the policy `execution_reporter` equals the current platform signer.
+
+GenLayer independently checks the transaction sender, agent attribution,
+registry binding, limits, whitelist, policy text, deadline, and replay state.
+The agent never receives the platform private key or MetaMask delegation data.
 
 ## 2. API key issuance
 
@@ -157,6 +211,11 @@ Field rules:
 
 The API waits for GenLayer finality before returning a verdict. An approved request may still have `execution_status: "failed"` when 1Shot is temporarily unavailable. That request remains retryable and visible in history.
 
+The HTTP response can still be `200` when policy evaluation succeeded but
+payout execution failed. Inspect `request.execution_status` and
+`request.execution_error`. Do not create a replacement request; the retry worker
+uses the same on-chain request ID.
+
 ## 5. Idempotency
 
 Use an idempotency key for invoices, subscriptions, and any operation that may be retried by a network client.
@@ -210,6 +269,13 @@ GET /api/v1/policy
 
 History is pulled from GenLayer state. The service does not maintain a separate mutable database as the source of truth.
 
+`limit` must be an integer from `1` to `100`. Request IDs must be `0x` followed
+by exactly 64 hexadecimal characters.
+
+`GET /policy` returns safe policy metadata, caps, budget usage, policy text, and
+whether a delegation is registered. It deliberately omits the serialized
+delegation, permission context, signatures, and platform private-key material.
+
 Status meanings:
 
 | Status | Meaning |
@@ -241,15 +307,37 @@ Clients should branch on `error`, not on human message text.
 | `invalid_api_key` | 401 | no |
 | `unauthorized` | 401 | no |
 | `agent_mismatch` | 403 | no |
+| `policy_inactive` | 403 | owner action |
+| `request_not_found` | 404 | check ID |
 | `idempotency_conflict` | 409 | no |
 | `invalid_amount` | 422 | no |
+| `invalid_request` | 422 | fix payload |
 | `unsupported_chain` | 422 | no |
 | `unsupported_wallet_capability` | 422 | owner action |
 | `policy_denied` | 422 | no |
 | `insufficient_balance` | 422 | after funding |
 | `genlayer_undetermined` | 503 | yes |
+| `genlayer_unavailable` | 502 | yes |
+| `execution_unavailable` | 502 | yes |
+| `platform_signer_misconfigured` | 503 | operator action |
 | `delegation_unavailable` | 422 | after setup repair |
 | `request_failed` | 400/500 | inspect state |
+
+### Troubleshooting
+
+| Symptom | Meaning | Action |
+| --- | --- | --- |
+| `invalid_api_key` | Missing, malformed, expired, rotated, or incorrectly signed key | Ask the owner to rotate and issue a new key |
+| `agent_mismatch` | Body address differs from the key's registered agent | Use the exact `agent` returned by `/balance` |
+| `policy_inactive` | Owner revoked the agent or policy | Owner must reactivate or reconfigure the agent |
+| `idempotency_conflict` | One key was reused with different payment details | Use the original payload or a new key for a different payment |
+| `genlayer_unavailable` | Submission, RPC, finality, or GenVM infrastructure failed | Retry the same idempotency key after backoff |
+| `execution_unavailable` | GenLayer approved, but 1Shot could not execute | Poll the same request; do not submit a duplicate |
+| `platform_signer_misconfigured` | Server signer is missing, malformed, or differs from the policy reporter | Operator must repair deployment configuration |
+
+Retry only `502` and `503` responses automatically. Use exponential backoff
+with jitter and always reuse the same `idempotency_key`. After an ambiguous
+timeout, query history or the request endpoint before another POST.
 
 ## 9. Minimal clients
 
@@ -291,3 +379,15 @@ const response = await fetch(`${base}/api/v1/spend`, {
 const result = await response.json();
 if (!response.ok) throw new Error(`${result.error}: ${result.message}`);
 ```
+
+## 10. Security rules for agent developers
+
+- Store the API key in a secret manager or environment variable.
+- Never place it in source control, browser code, URLs, analytics, or prompts.
+- Never trust the decoded key payload without calling the API; registry state
+  and key version can change after issuance.
+- Do not log complete request or response headers.
+- Use a unique idempotency key for each real-world invoice or payment intent.
+- Validate the recipient independently before submitting.
+- Rotate the key immediately after accidental disclosure.
+- Treat `tx_hash` as authoritative only when `execution_status` is `executed`.

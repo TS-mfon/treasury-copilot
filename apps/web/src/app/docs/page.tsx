@@ -54,6 +54,19 @@ export default function DocsPage() {
         </section>
 
         <section className="panel rounded-lg p-6">
+          <h2 className="text-xl font-semibold">Quickstart</h2>
+          <ol className="mt-4 grid gap-3 text-sm text-neutral-300">
+            <li><span className="font-mono text-purple">1.</span> Store the one-time API key in a secret manager or environment variable.</li>
+            <li><span className="font-mono text-purple">2.</span> Call <span className="font-mono">GET /balance</span> and use the returned agent address exactly.</li>
+            <li><span className="font-mono text-purple">3.</span> Submit a decimal string amount with a stable idempotency key.</li>
+            <li><span className="font-mono text-purple">4.</span> Save the request ID and poll the request endpoint after timeouts.</li>
+          </ol>
+          <p className="mt-4 text-sm text-neutral-400">
+            The key identifies the agent but never signs a blockchain transaction. Every GenLayer write is signed by the server platform wallet after the key, registry, policy, funding account, chain, token, and execution reporter are verified.
+          </p>
+        </section>
+
+        <section className="panel rounded-lg p-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold"><Code2 size={18} /> POST /api/v1/spend</h2>
           <p className="mt-2 text-neutral-400">
             Submits one spend request and waits for GenLayer finality. Finalized approvals immediately attempt 1Shot execution; the authenticated relay worker retries requests whose execution failed. Use an idempotency_key to avoid duplicate processing.
@@ -71,15 +84,11 @@ export default function DocsPage() {
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Response</h3>
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{`{
   "request_id": "0x...",
-  "agent": "0x...",
-  "recipient": "0x...",
-  "amount": "25.00",
-  "amount_units": "25000000",
-  "token_decimals": 6,
   "verdict": "approved",
+  "reasoning": "Within auto-approve threshold",
   "request": {
     "status": "executed",
-    "reasoning": "Within auto-approve threshold.",
+    "recipient": "0x...",
     "amount": "25",
     "amount_units": "25000000",
     "execution_status": "executed",
@@ -87,6 +96,10 @@ export default function DocsPage() {
     "explorer_url": "https://sepolia.basescan.org/tx/0x...",
     "created_at": "2026-07-21T12:10:00.000Z",
     "updated_at": "2026-07-21T12:11:00.000Z"
+  },
+  "genlayer": {
+    "request_tx_hash": "0x...",
+    "record_execution_tx_hash": "0x..."
   }
 }`}</pre>
         </section>
@@ -110,6 +123,9 @@ export default function DocsPage() {
             Returns one request record by ID, scoped to the authenticated API key. Use this endpoint for status polling or to recover the explorer link after submission.
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">{requestExample}</pre>
+          <p className="mt-4 text-sm text-neutral-400">
+            GET /api/v1/policy returns safe caps and policy metadata. Raw delegation payloads, permission contexts, signatures, and signer secrets are never returned to agents.
+          </p>
         </section>
 
         <section className="panel rounded-lg p-6">
@@ -160,7 +176,17 @@ export default function DocsPage() {
   "error": "insufficient_balance",
   "message": "Delegated balance is below the requested amount",
   "fields": { "amount": ["requested 25.00 USDC, available 4.20 USDC"] }
+}
+
+{
+  "error": "genlayer_unavailable",
+  "message": "submit_request submission failed on GenLayer: ...",
+  "fields": {},
+  "retryable": true
 }`}</pre>
+          <p className="mt-4 text-sm text-neutral-400">
+            Retry only 502 and 503 responses, use exponential backoff, and keep the same idempotency key. Do not automatically retry authentication, validation, policy, or conflict errors.
+          </p>
         </section>
 
         <section className="panel rounded-lg p-6">

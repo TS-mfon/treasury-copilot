@@ -67,9 +67,13 @@ export interface RequestState {
 }
 
 export function platformAccount() {
-  const key = process.env.AGENT_SIGNER_PRIVATE_KEY;
+  const key = process.env.AGENT_SIGNER_PRIVATE_KEY?.trim();
   if (!key) throw new Error("Platform signer is not configured");
-  return privateKeyToAccount(key.startsWith("0x") ? key as Hex : `0x${key}` as Hex);
+  const normalized = key.startsWith("0x") ? key : `0x${key}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error("Platform signer private key must be exactly 32 bytes of hex");
+  }
+  return privateKeyToAccount(normalized as Hex);
 }
 
 export function parseSpendPayload(value: unknown): SpendPayload {
@@ -117,7 +121,27 @@ export function assertPolicyMatchesApiKey(policy: PolicyState, claims: AgentApiK
   if (lower(policy.delegated_account) !== claims.delegatedAccount.toLowerCase()) throw new Error("API key delegated account does not match policy");
   if (lower(policy.token_address) !== claims.token.toLowerCase()) throw new Error("API key token does not match policy");
   if (String(policy.evm_chain_id ?? "") !== String(claims.chainId)) throw new Error("API key chain does not match policy");
+  if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
+    throw new Error("Platform signer does not match the policy execution reporter");
+  }
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Delegation is not registered for this policy");
+}
+
+export function publicPolicyState(policy: PolicyState) {
+  return {
+    contract_version: policy.contract_version ?? "",
+    authorized_agent: policy.authorized_agent ?? "",
+    delegated_account: policy.delegated_account ?? "",
+    token_address: policy.token_address ?? "",
+    evm_chain_id: policy.evm_chain_id ?? "",
+    per_tx_cap_atto: policy.per_tx_cap_atto ?? "0",
+    weekly_cap_atto: policy.weekly_cap_atto ?? "0",
+    auto_approve_threshold_atto: policy.auto_approve_threshold_atto ?? "0",
+    weekly_spent_atto: policy.weekly_spent_atto ?? "0",
+    policy_text: policy.policy_text ?? "",
+    policy_nonce: policy.policy_nonce ?? "0",
+    delegation_registered: policy.delegation_registered === true,
+  };
 }
 
 export async function assertRegistryBinding(claims: AgentApiKeyClaims) {
@@ -212,6 +236,9 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
 
 export async function executeApprovedPolicyRequest(policyAddress: Address, requestId: Hex) {
   const policy = await readPolicyState(policyAddress);
+  if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
+    throw new Error("Platform signer does not match the policy execution reporter");
+  }
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Approved request has no active ERC-7715 delegation");
   const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
   if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");

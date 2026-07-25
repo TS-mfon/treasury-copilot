@@ -5,15 +5,20 @@ import { studionet } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 import type { Address, Hex } from "viem";
 import { canonicalGenLayerAddress } from "@/lib/genlayerAddress";
+import { errorMessage } from "@/lib/errors";
 
 type GenLayerServerClient = ReturnType<typeof createClient>;
 type GenLayerAccount = ReturnType<typeof createAccount>;
 type GenLayerHash = Hex & { length: 66 };
 
 function privateKey() {
-  const key = process.env.AGENT_SIGNER_PRIVATE_KEY;
+  const key = process.env.AGENT_SIGNER_PRIVATE_KEY?.trim();
   if (!key) throw new Error("Platform signer is not configured");
-  return key.startsWith("0x") ? key as Hex : `0x${key}` as Hex;
+  const normalized = key.startsWith("0x") ? key : `0x${key}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error("Platform signer private key must be exactly 32 bytes of hex");
+  }
+  return normalized as Hex;
 }
 
 let cachedAccount: GenLayerAccount | undefined;
@@ -102,13 +107,18 @@ export async function genlayerWrite(
   args: unknown[] = [],
   finality: "decided" | "finalized" = "finalized",
 ) {
-  const hash = await client().writeContract({
-    account: account(),
-    address: canonicalGenLayerAddress(address),
-    functionName,
-    args: args as never[],
-    value: 0n,
-  }) as Hex;
+  let hash: Hex;
+  try {
+    hash = await client().writeContract({
+      account: account(),
+      address: canonicalGenLayerAddress(address),
+      functionName,
+      args: args as never[],
+      value: 0n,
+    }) as Hex;
+  } catch (error) {
+    throw new Error(`${functionName} submission failed on GenLayer: ${errorMessage(error)}`);
+  }
   const receipt = await client().waitForTransactionReceipt({
     hash: hash as GenLayerHash,
     status: finality === "finalized" ? TransactionStatus.FINALIZED : TransactionStatus.ACCEPTED,

@@ -39,3 +39,21 @@ test("connected MetaMask capability errors are not mislabeled as disconnected", 
     /does not support ERC-7715/,
   );
 });
+
+test("nested RPC details are preferred over generic viem summaries", () => {
+  const error = {
+    shortMessage: "Missing or invalid parameters.",
+    details: "transaction nonce is already in use",
+  };
+  assert.equal(errorMessage(error), "transaction nonce is already in use");
+});
+
+test("upstream and request errors receive stable status codes", async () => {
+  const genlayer = apiErrorResponse(new Error("submit_request submission failed on GenLayer: RPC unavailable"));
+  assert.equal(genlayer.status, 502);
+  assert.equal((await genlayer.json()).error, "genlayer_unavailable");
+
+  const invalidRequest = apiErrorResponse(new Error("History limit must be an integer from 1 to 100"));
+  assert.equal(invalidRequest.status, 422);
+  assert.equal((await invalidRequest.json()).error, "invalid_request");
+});

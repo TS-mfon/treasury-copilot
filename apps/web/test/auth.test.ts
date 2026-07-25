@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { privateKeyToAccount } from "viem/accounts";
-import { issueAgentApiKey, verifyAgentApiKey } from "../src/lib/apiAuth";
+import { bearerToken, issueAgentApiKey, verifyAgentApiKey } from "../src/lib/apiAuth";
 import { ownerNonce, ownerSession, sessionOwner, verifyOwnerNonce } from "../src/lib/ownerAuth";
 
 const account = privateKeyToAccount(`0x${"11".repeat(32)}`);
@@ -47,6 +47,16 @@ test("agent API key tampering fails closed", () => {
     tokenDecimals: 6,
   });
   assert.throws(() => verifyAgentApiKey(`${key.slice(0, -1)}x`), /Invalid agent API key signature/);
+});
+
+test("malformed API keys and bearer headers fail closed", () => {
+  assert.throws(() => verifyAgentApiKey("tcp_not-json.signature"), /Invalid agent API key/);
+  assert.throws(
+    () => bearerToken(new Request("https://example.test", {
+      headers: { authorization: "Bearer one extra" },
+    })),
+    /bearer token required/,
+  );
 });
 
 test("each API key issuance has a unique key id for the bound agent policy", () => {

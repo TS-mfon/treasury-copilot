@@ -13,10 +13,10 @@ export interface ApiErrorShape {
 }
 
 const ERROR_MESSAGE_KEYS = [
-  "shortMessage",
-  "message",
   "details",
   "reason",
+  "message",
+  "shortMessage",
   "error",
   "cause",
   "data",
@@ -113,10 +113,15 @@ function apiCode(message: string) {
   const value = message.toLowerCase();
   if (value.includes("agent") && value.includes("match")) return ["agent_mismatch", 403] as const;
   if (value.includes("bearer") || value.includes("api key")) return ["invalid_api_key", 401] as const;
+  if (value.includes("policy") && value.includes("inactive")) return ["policy_inactive", 403] as const;
+  if (value.includes("unknown request") || value.includes("request not found")) return ["request_not_found", 404] as const;
   if (value.includes("idempotency")) return ["idempotency_conflict", 409] as const;
   if (value.includes("amount") || value.includes("decimal")) return ["invalid_amount", 422] as const;
   if (value.includes("insufficient") || value.includes("balance")) return ["insufficient_balance", 422] as const;
   if (value.includes("undetermined") || value.includes("validator") || value.includes("consensus")) return ["genlayer_undetermined", 503] as const;
+  if (value.includes("genlayer") || value.includes("genvm") || value.includes("rpc")) return ["genlayer_unavailable", 502] as const;
+  if (value.includes("1shot") || value.includes("relayer")) return ["execution_unavailable", 502] as const;
+  if (value.includes("platform signer")) return ["platform_signer_misconfigured", 503] as const;
   if (value.includes("execution permissions") || value.includes("erc-7715") || value.includes("requestexecutionpermissions")) {
     return ["unsupported_wallet_capability", 422] as const;
   }
@@ -124,6 +129,14 @@ function apiCode(message: string) {
   if (value.includes("delegation")) return ["delegation_unavailable", 422] as const;
   if (value.includes("policy") && value.includes("den")) return ["policy_denied", 422] as const;
   if (value.includes("unauthorized") || value.includes("authentication") || value.includes("session")) return ["unauthorized", 401] as const;
+  if (
+    value.includes("invalid recipient")
+    || value.includes("category must")
+    || value.includes("justification must")
+    || value.includes("invalid request id")
+    || value.includes("invalid spend payload")
+    || value.includes("history limit")
+  ) return ["invalid_request", 422] as const;
   return ["request_failed", 400] as const;
 }
 
