@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { assertRegistryBinding, readPolicyRequest, requestToApi } from "@/lib/apiServer";
+import { assertRegistryBinding, listPolicyRequests, readPolicyRequest, requestToApi } from "@/lib/apiServer";
 import { apiErrorResponse } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -14,6 +14,10 @@ export async function GET(
     if (!/^0x[0-9a-fA-F]{64}$/.test(id)) throw new Error("Invalid request id");
     const claims = verifyAgentApiKey(bearerToken(request));
     await assertRegistryBinding(claims);
+    const ids = await listPolicyRequests(claims.policy);
+    if (!ids.some((requestId) => requestId.toLowerCase() === id.toLowerCase())) {
+      throw new Error("Request not found");
+    }
     const row = await readPolicyRequest(claims.policy, id);
     const decimals = claims.tokenDecimals ?? 6;
     const formatted = requestToApi(row, decimals, claims.chainId);

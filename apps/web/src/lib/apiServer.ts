@@ -188,7 +188,8 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
   const justificationHash = keccak256(stringToHex(payload.justification));
 
   if (payload.idempotencyKey) {
-    try {
+    const requestIds = await listPolicyRequests(claims.policy);
+    if (requestIds.some((id) => id.toLowerCase() === requestId.toLowerCase())) {
       const existing = await readPolicyRequest(claims.policy, requestId);
       const samePayload =
         lower(existing.recipient) === payload.recipient.toLowerCase()
@@ -222,8 +223,6 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
         execution,
         record: execution?.record ?? null,
       };
-    } catch (error) {
-      if (error instanceof Error && !error.message.toLowerCase().includes("unknown request")) throw error;
     }
   }
 
