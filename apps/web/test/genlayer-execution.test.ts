@@ -17,6 +17,25 @@ test("finalized GenLayer receipts still fail closed on contract execution errors
   }, "Treasury policy deployment"), /failed on GenLayer/);
 });
 
+test("GenLayer rollback payload is preserved in the surfaced operation error", () => {
+  assert.throws(
+    () => assertGenLayerExecutionSucceeded({
+      consensus_data: {
+        leader_receipt: [{
+          mode: "leader",
+          execution_result: "ERROR",
+          result: {
+            status: "rollback",
+            payload: "[EXPECTED] Only registry gateway",
+          },
+          genvm_result: { stderr: "" },
+        }],
+      },
+    }, "register_policy"),
+    /register_policy failed on GenLayer: \[EXPECTED\] Only registry gateway/,
+  );
+});
+
 test("successful finalized GenLayer receipts pass execution validation", () => {
   assert.doesNotThrow(() => assertGenLayerExecutionSucceeded({
     status_name: "FINALIZED",

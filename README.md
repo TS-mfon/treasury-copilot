@@ -109,7 +109,7 @@ The setup intent is bound to owner, agent, policy placeholder, chain, token, del
 Base URL:
 
 ```text
-https://YOUR_DOMAIN/api/v1
+https://treasury-copilot-genjury.vercel.app/api/v1
 ```
 
 Authentication:
@@ -276,10 +276,33 @@ verified by the server.
 
 See [docs/deployment.md](docs/deployment.md), [docs/api.md](docs/api.md), and the in-app `/docs` page.
 
-The July 22, 2026 StudioNet release uses registry
-`0x84EcD64A17071885951BC15DB8634C766E386294` and validated smoke policy
-`0x252Df8515eE24e1844fFC53DA65f1AfC83d02b70`. Finalized deployment and
-three-request evidence is recorded in `docs/deployment.md`.
+The production StudioNet registry is
+`0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9`. It was deployed on July 25,
+2026 by the same platform GenLayer account used for server writes:
+`0x1072e78B72840BbC921493ea1C97dC5CAA54598F`. This ownership match is
+required because registry gateway writes such as `register_policy` reject every
+other GenLayer sender.
+
+The previous registry `0x84EcD64A17071885951BC15DB8634C766E386294`
+and its July 22 smoke policy remain historical validation evidence only. New
+owner policies must not use that registry. Deployment transactions, the gateway
+authorization smoke test, and the earlier three-request policy evidence are
+recorded in `docs/deployment.md`.
+
+### Delegation and policy binding
+
+The MetaMask permission and GenLayer policy are linked by exact values, not by
+UI state alone. Setup verifies and stores the same owner/delegated account,
+platform delegate, Base chain ID, USDC address, weekly amount, and permission
+context returned by MetaMask. The registry additionally binds the owner, agent,
+policy, delegated account, chain, and token. The API key is issued only after
+the policy's stored delegation is read back and all fields match.
+
+The **Auto-approve limit** is not an extra delegation or transfer allowance.
+Requests at or below this amount bypass the LLM review only after deterministic
+cap, weekly budget, whitelist, identity, and replay checks pass. Requests above
+the threshold but within the per-request and weekly caps go through GenLayer
+policy review. Requests above a hard cap are denied before LLM evaluation.
 
 ## Security checklist
 

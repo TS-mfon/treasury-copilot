@@ -76,7 +76,9 @@ export function assertGenLayerExecutionSucceeded(
       const stderr = typeof genvmResult?.stderr === "string"
         ? genvmResult.stderr.trim().split("\n").slice(-4).join(" ")
         : "";
-      throw new Error(`${operation} failed on GenLayer${stderr ? `: ${stderr}` : ""}`);
+      const payload = typeof result?.payload === "string" ? result.payload.trim() : "";
+      const detail = payload || stderr;
+      throw new Error(`${operation} failed on GenLayer${detail ? `: ${detail}` : ""}`);
     }
   }
 }

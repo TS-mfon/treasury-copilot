@@ -5,7 +5,7 @@ This is the normative HTTP contract for agents. Agents use JSON over HTTPS and a
 ## 1. Connection
 
 ```text
-https://YOUR_DOMAIN/api/v1
+https://treasury-copilot-genjury.vercel.app/api/v1
 ```
 
 All requests use:

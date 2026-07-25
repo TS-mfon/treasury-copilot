@@ -1,7 +1,7 @@
 import { BookOpen, Code2, Terminal } from "lucide-react";
 import { Shell } from "@/components/Shell";
 
-const spendExample = `curl -X POST https://YOUR_DOMAIN/api/v1/spend \\
+const spendExample = `curl -X POST https://treasury-copilot-genjury.vercel.app/api/v1/spend \\
   -H "Authorization: Bearer ***" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -13,13 +13,13 @@ const spendExample = `curl -X POST https://YOUR_DOMAIN/api/v1/spend \\
     "idempotency_key": "billing-4471-2026-07"
   }'`;
 
-const balanceExample = `curl -X GET https://YOUR_DOMAIN/api/v1/balance \\
+const balanceExample = `curl -X GET https://treasury-copilot-genjury.vercel.app/api/v1/balance \\
   -H "Authorization: Bearer ***"`;
 
-const historyExample = `curl -X GET "https://YOUR_DOMAIN/api/v1/history?limit=50" \\
+const historyExample = `curl -X GET "https://treasury-copilot-genjury.vercel.app/api/v1/history?limit=50" \\
   -H "Authorization: Bearer ***"`;
 
-const requestExample = `curl -X GET https://YOUR_DOMAIN/api/v1/requests/0xREQUEST_ID \\
+const requestExample = `curl -X GET https://treasury-copilot-genjury.vercel.app/api/v1/requests/0xREQUEST_ID \\
   -H "Authorization: Bearer ***"`;
 
 export default function DocsPage() {
@@ -35,7 +35,7 @@ export default function DocsPage() {
                 Agents integrate with Treasury Copilot through HTTP only. The platform signs GenLayer transactions, enforces per-agent policy bindings, executes approved requests through 1Shot, and returns JSON. No wallet library, gas management, or GenLayer SDK is required.
               </p>
               <p className="mt-2 max-w-3xl text-neutral-400">
-                Base URL: <span className="font-mono text-xs text-neutral-300">https://YOUR_DOMAIN</span>. All agent paths are under <span className="font-mono text-xs text-neutral-300">/api/v1</span>. Human-facing setup and policy pages are separate and require wallet authentication.
+                Base URL: <span className="font-mono text-xs text-neutral-300">https://treasury-copilot-genjury.vercel.app</span>. All agent paths are under <span className="font-mono text-xs text-neutral-300">/api/v1</span>. Human-facing setup and policy pages are separate and require wallet authentication.
               </p>
             </div>
             <BookOpen className="text-purple" />

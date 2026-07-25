@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useAccount, useConnect, useSignTypedData } from "wagmi";
-import { Clipboard, Fuel, KeyRound, ShieldCheck, WalletCards } from "lucide-react";
+import { CheckCircle2, Clipboard, Fuel, KeyRound, LoaderCircle, ShieldCheck, WalletCards } from "lucide-react";
 import { isAddress, zeroAddress, type Address } from "viem";
 import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
@@ -18,6 +18,12 @@ import { friendlyError } from "@/lib/errors";
 import { canonicalJson, hashActionPayload } from "@/lib/ownerActions";
 
 type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base">;
+
+type SetupResult = {
+  policy: Address;
+  deployment_tx_hash: string | null;
+  delegation_tx_hash: string;
+};
 
 const delegationChains: Array<{
   key: DelegationChainKey;
@@ -53,7 +59,10 @@ export default function SetupPage() {
   const [status, setStatus] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
+  const [setupError, setSetupError] = useState("");
   const [isDelegating, setIsDelegating] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
   const tokenConfig = selectedChain.tokens[tokenSymbol];
@@ -85,6 +94,9 @@ export default function SetupPage() {
 
   async function approveDelegation() {
     setError("");
+    setSetupError("");
+    setSetupResult(null);
+    setApiKey("");
     setIsDelegating(true);
     try {
       if (!executionAvailable) {
@@ -128,10 +140,14 @@ export default function SetupPage() {
   }
 
   async function registerDelegation() {
-    setError("");
+    setSetupError("");
+    setSetupResult(null);
+    setApiKey("");
+    setIsRegistering(true);
     try {
       if (!grant) throw new Error("Approve delegation first");
       if (!address) throw new Error("Owner wallet is not connected");
+      setStatus("Loading the current GenLayer registry nonce...");
       const setupChallenge = await fetch("/api/v1/setup");
       const challenge = await setupChallenge.json();
       if (!setupChallenge.ok) throw new Error(challenge.message ?? challenge.error ?? "Could not load setup authorization");
@@ -153,7 +169,7 @@ export default function SetupPage() {
       ]);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
       const nonce = BigInt(challenge.nonce);
-      setStatus("Confirm the owner authorization. Treasury Copilot will deploy and register the agent policy.");
+      setStatus("Confirm the owner authorization in MetaMask.");
       const ownerSignature = await signTypedDataAsync({
         domain: buildOwnerActionDomain(grant.chainId, challenge.registry as Address),
         types: ownerActionTypes,
@@ -170,6 +186,7 @@ export default function SetupPage() {
           deadline,
         },
       });
+      setStatus("Deploying the agent policy, registering its funding binding, and storing the delegation on GenLayer. This can take several minutes.");
       const setupResponse = await fetch("/api/v1/setup", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -192,11 +209,21 @@ export default function SetupPage() {
         }),
       });
       const setup = await setupResponse.json();
-      if (!setupResponse.ok) throw new Error(setup.error ?? "API key setup failed");
+      if (!setupResponse.ok) throw new Error(setup.message ?? setup.error ?? "API key setup failed");
       setApiKey(setup.agent_api_key);
-      setStatus("Agent treasury is ready. Store the API key now; it will not be shown again.");
+      setSetupResult({
+        policy: setup.policy as Address,
+        deployment_tx_hash: setup.deployment_tx_hash,
+        delegation_tx_hash: setup.delegation_tx_hash,
+      });
+      setStatus("Agent treasury registered successfully. Store the API key now; it will not be shown again.");
     } catch (err) {
-      setError(friendlyError(err));
+      const message = friendlyError(err);
+      setSetupError(message);
+      setStatus("");
+      console.error("[registerDelegation] setup failed", { error: err, message });
+    } finally {
+      setIsRegistering(false);
     }
   }
 
@@ -262,6 +289,9 @@ export default function SetupPage() {
                   setChainKey(event.target.value as DelegationChainKey);
                   setGrant(null);
                   setError("");
+                  setSetupError("");
+                  setSetupResult(null);
+                  setApiKey("");
                   setStatus("");
                 }}
               >
@@ -318,8 +348,11 @@ export default function SetupPage() {
               <input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} />
             </label>
             <label className="grid gap-2 text-sm font-medium">
-              Auto-approve {tokenSymbol}
+              Auto-approve limit {tokenSymbol}
               <input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+              <span className="text-xs font-normal leading-5 text-neutral-500">
+                Requests at or below this amount are approved automatically after cap and whitelist checks. Larger requests go through the GenLayer policy review.
+              </span>
             </label>
           </div>
           <label className="mt-4 grid gap-2 text-sm font-medium">
@@ -333,13 +366,43 @@ export default function SetupPage() {
 
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            disabled={!grant || !isAddress(effectiveAgent)}
+            disabled={!grant || !isAddress(effectiveAgent) || isRegistering || Boolean(apiKey)}
             onClick={registerDelegation}
           >
-            <ShieldCheck size={16} /> Register delegation
+            {isRegistering ? <LoaderCircle className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+            {isRegistering ? "Registering on GenLayer..." : apiKey ? "Registration complete" : "Register delegation"}
           </button>
 
           {status && <p className="mt-4 rounded-md border border-outline bg-surface-high p-3 text-sm text-neutral-200">{status}</p>}
+          {setupError && (
+            <div className="mt-4 rounded-md border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
+              <p className="font-semibold">Registration failed</p>
+              <p className="mt-2 break-words text-neutral-200">{setupError}</p>
+            </div>
+          )}
+          {setupResult && (
+            <div className="mt-4 rounded-md border border-success/30 bg-success/10 p-4 text-sm">
+              <div className="flex items-center gap-2 font-semibold text-success">
+                <CheckCircle2 size={16} /> Policy and delegation registered
+              </div>
+              <dl className="mt-3 grid gap-2 font-mono text-xs text-neutral-300">
+                <div>
+                  <dt className="text-neutral-500">Policy</dt>
+                  <dd className="break-all">{setupResult.policy}</dd>
+                </div>
+                {setupResult.deployment_tx_hash && (
+                  <div>
+                    <dt className="text-neutral-500">Policy deployment</dt>
+                    <dd className="break-all">{setupResult.deployment_tx_hash}</dd>
+                  </div>
+                )}
+                <div>
+                  <dt className="text-neutral-500">Delegation registration</dt>
+                  <dd className="break-all">{setupResult.delegation_tx_hash}</dd>
+                </div>
+              </dl>
+            </div>
+          )}
           {apiKey && (
             <div className="mt-4 rounded-md border border-purple/40 bg-purple/10 p-4 text-sm">
               <div className="mb-2 flex items-center gap-2 font-semibold text-purple"><KeyRound size={15} /> Agent API key</div>

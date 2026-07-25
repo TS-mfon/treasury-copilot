@@ -170,9 +170,63 @@ For each transaction, record:
 - policy address;
 - explorer URL if available.
 
-### StudioNet release evidence: July 22, 2026
+### Production registry migration: July 25, 2026
 
-The current release was validated against:
+The production application uses:
+
+```text
+Registry:
+0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9
+
+Registry gateway / platform signer:
+0x1072e78B72840BbC921493ea1C97dC5CAA54598F
+
+Registry deployment:
+0x627aee01621e3bcb6273bfdcd0a48ec8101275ddf0612d936de3c4543e63fb07
+
+Gateway authorization smoke:
+0x74be8173aee401a841702bf4b0535b93f3fbbf8243bd0965c2af959c39379f0e
+```
+
+The deployment and authorization smoke both reached `FINALIZED`, returned
+`MAJORITY_AGREE`, and completed leader execution successfully. The smoke write
+used the registry's owner-only `consume_owner_nonce` path and changed a dummy
+owner nonce from `0` to `1`, proving that the server platform signer is the
+registry gateway.
+
+This migration fixes policy registration transaction
+`0xbbce87c335f2a18d4cf3b84b7a709ee1ed286aeddfbdf678ce5dc5397fb5f93c`,
+which finalized with a GenVM rollback payload of
+`[EXPECTED] Only registry gateway`. The failed policy
+`0x91BCb901bc969dcbCaeEFD60067A34aF8401b000` was never registered and must
+not be reused. The old registry was deployed by a different account, so its
+gateway check correctly rejected the current platform signer.
+
+Both `GENLAYER_REGISTRY` and `NEXT_PUBLIC_GENLAYER_REGISTRY` must point to the
+July 25 registry. The owner can reuse a still-loaded MetaMask weekly grant
+because the platform delegate did not change. A browser refresh discards the
+in-memory grant and requires the permission request to be opened again.
+
+### Delegation-policy binding
+
+Registration is complete only after all of these checks succeed:
+
+1. The server validates the MetaMask grant's owner, delegate, chain, token,
+   weekly atomic amount, permission context, and delegated account.
+2. The registry stores the exact owner, agent, policy, chain, delegated account,
+   token address, symbol, and decimals.
+3. The policy stores the exact delegated account, token, permission context,
+   and canonical serialized MetaMask grant.
+4. The server reads the policy back and rejects setup if any stored delegation
+   field differs.
+5. Only then does the server issue the agent's unique signed API key.
+
+The API key includes immutable claims for the same owner, agent, policy,
+delegated account, chain, token, decimals, key ID, and on-chain key version.
+
+### Historical StudioNet evidence: July 22, 2026
+
+The prior implementation was validated against:
 
 ```text
 Registry:
@@ -193,6 +247,10 @@ Policy registration:
 
 All three deployment/registration transactions reached `FINALIZED`, returned
 `MAJORITY_AGREE`, and committed successful leader execution.
+
+This registry and smoke policy are retained as historical contract-test
+evidence. They are superseded for production owner setup because the registry
+gateway does not match the current platform signer.
 
 Finalized request evidence:
 
