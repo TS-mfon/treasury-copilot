@@ -119,12 +119,19 @@ export async function genlayerWrite(
   } catch (error) {
     throw new Error(`${functionName} submission failed on GenLayer: ${errorMessage(error)}`);
   }
-  const receipt = await client().waitForTransactionReceipt({
-    hash: hash as GenLayerHash,
-    status: finality === "finalized" ? TransactionStatus.FINALIZED : TransactionStatus.ACCEPTED,
-    retries: 80,
-    interval: 3000,
-  });
+  let receipt;
+  try {
+    receipt = await client().waitForTransactionReceipt({
+      hash: hash as GenLayerHash,
+      status: finality === "finalized" ? TransactionStatus.FINALIZED : TransactionStatus.ACCEPTED,
+      retries: 80,
+      interval: 3000,
+    });
+  } catch (error) {
+    throw new Error(
+      `${functionName} transaction ${hash} failed while waiting for GenLayer ${finality}: ${errorMessage(error)}`,
+    );
+  }
   const rawReceipt = receipt as Record<string, unknown>;
   assertGenLayerExecutionSucceeded(rawReceipt, functionName);
   const resultName = String(rawReceipt.resultName ?? rawReceipt.result_name ?? "");

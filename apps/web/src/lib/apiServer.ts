@@ -196,7 +196,32 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
         && existing.category === payload.category
         && existing.justification === payload.justification;
       if (!samePayload) throw new Error("idempotency_key was already used with a different request");
-      return { requestId, policy, requestState: existing, submit: { hash: null, receipt: null }, execution: null, record: null };
+      let recovered = existing;
+      let execution = null;
+      if (!recovered.finalized) {
+        await genlayerWrite(claims.policy, "mark_request_finalized", [requestId]);
+        recovered = await readPolicyRequest(claims.policy, requestId);
+      }
+      if (
+        recovered.verdict === "approved"
+        && recovered.finalized
+        && !recovered.tx_hash
+        && ["ready", "failed", "approved_pending_execution"].includes(recovered.execution_status ?? "")
+      ) {
+        try {
+          execution = await executeApprovedPolicyRequest(claims.policy, requestId);
+        } catch {
+          recovered = await readPolicyRequest(claims.policy, requestId);
+        }
+      }
+      return {
+        requestId,
+        policy,
+        requestState: execution?.requestState ?? recovered,
+        submit: { hash: null, receipt: null },
+        execution,
+        record: execution?.record ?? null,
+      };
     } catch (error) {
       if (error instanceof Error && !error.message.toLowerCase().includes("unknown request")) throw error;
     }
