@@ -16,5 +16,6 @@ __pycache__
 *.pyc
 .vercel
 AGENT.md
+Upgrade.md
 pk.md
 keys.md

@@ -66,6 +66,44 @@ export interface RequestState {
   finalized?: boolean;
 }
 
+export function chainToApi(chainId: number) {
+  const chain = chainById(chainId);
+  if (!chain) {
+    return {
+      chain_id: chainId,
+      name: "Unknown chain",
+      explorer_url: null,
+    };
+  }
+  return {
+    chain_id: chain.chainId,
+    name: chain.name,
+    explorer_url: chain.explorerUrl,
+  };
+}
+
+export function policySecurityProfile(policy: PolicyState) {
+  const version = Number(policy.contract_version ?? 0);
+  const threshold = BigInt(policy.auto_approve_threshold_atto ?? "0");
+  const warnings: string[] = [];
+
+  if (version > 0 && version < 3 && threshold > 0n) {
+    warnings.push(
+      "This legacy policy can approve requests at or below its fast-approval limit without semantic policy review. Set the limit to 0 and migrate to policy contract V3.",
+    );
+  }
+  if (!policy.delegation_registered) {
+    warnings.push("No executable delegation is registered for this policy.");
+  }
+
+  return {
+    contract_version: String(policy.contract_version ?? ""),
+    semantic_review_required_for_all_requests: version >= 3,
+    legacy_fast_approval_active: version > 0 && version < 3 && threshold > 0n,
+    warnings,
+  };
+}
+
 export function platformAccount() {
   const key = process.env.AGENT_SIGNER_PRIVATE_KEY?.trim();
   if (!key) throw new Error("Platform signer is not configured");
@@ -141,6 +179,7 @@ export function publicPolicyState(policy: PolicyState) {
     policy_text: policy.policy_text ?? "",
     policy_nonce: policy.policy_nonce ?? "0",
     delegation_registered: policy.delegation_registered === true,
+    security: policySecurityProfile(policy),
   };
 }
 
@@ -222,6 +261,7 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
         submit: { hash: null, receipt: null },
         execution,
         record: execution?.record ?? null,
+        idempotentReplay: true,
       };
     }
   }
@@ -255,6 +295,7 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
     submit,
     execution,
     record: execution?.record ?? null,
+    idempotentReplay: false,
   };
 }
 
@@ -322,6 +363,17 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
         ? "approved"
         : executionStatus;
   const explorer = chainId ? chainById(chainId)?.explorerUrl : undefined;
+  const decisionMode = row.reasoning === "Within auto-approve threshold"
+    || row.reasoning === "Within fast-approval threshold"
+    ? "legacy_fast_approval"
+    : row.verdict === "denied" && (
+      row.reasoning === "Amount must be greater than zero"
+      || row.reasoning === "Exceeds per-transaction cap"
+      || row.reasoning === "Would exceed weekly cap"
+      || row.reasoning === "Recipient not on whitelist"
+    )
+      ? "deterministic"
+      : "prompt_comparative";
   return {
     request_id: row.request_id,
     recipient: row.recipient,
@@ -330,6 +382,7 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
     category: row.category,
     justification: row.justification,
     verdict: row.verdict,
+    decision_mode: decisionMode,
     status,
     reasoning: row.reasoning,
     tx_hash: row.tx_hash,
@@ -339,5 +392,6 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
     created_at: row.created_at,
     updated_at: row.updated_at ?? row.created_at,
     explorer_url: row.tx_hash && explorer ? `${explorer}/tx/${row.tx_hash}` : null,
+    chain: chainId ? chainToApi(chainId) : null,
   };
 }

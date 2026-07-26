@@ -24,6 +24,7 @@ interface PolicyRow {
     chain_id: string;
   };
   state: {
+    contract_version: string;
     owner: Address;
     per_tx_cap_atto: string;
     weekly_cap_atto: string;
@@ -222,8 +223,16 @@ export default function PolicyPage() {
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2 text-sm font-medium">Per-request cap<input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} /></label>
             <label className="grid gap-2 text-sm font-medium">Weekly cap<input className="field" value={weeklyCap} onChange={(event) => setWeeklyCap(event.target.value)} /></label>
-            <label className="grid gap-2 text-sm font-medium">Auto-approve threshold<input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label>
+            <label className="grid gap-2 text-sm font-medium">
+              Fast approval limit
+              <input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+            </label>
           </div>
+          {BigInt(selected?.state.auto_approve_threshold_atto ?? "0") > 0n && (
+            <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
+              This legacy policy can bypass semantic policy review for small requests. Set the fast approval limit to 0. Re-registering the delegation migrates the agent to policy V3, where every request uses GenLayer prompt-comparative review.
+            </p>
+          )}
           <label className="grid gap-2 text-sm font-medium">
             Policy text
             <textarea className="field min-h-44" value={policyText} onChange={(event) => setPolicyText(event.target.value)} />

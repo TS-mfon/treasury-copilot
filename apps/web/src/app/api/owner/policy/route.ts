@@ -88,7 +88,10 @@ export async function PUT(request: Request) {
     const perTx = amountToUnits(String(body.per_tx_cap ?? ""), decimals);
     const weekly = amountToUnits(String(body.weekly_cap ?? ""), decimals);
     const threshold = amountToUnits(String(body.auto_approve_threshold ?? ""), decimals);
-    if (threshold > perTx) throw new Error("Auto-approve threshold cannot exceed the per-request cap");
+    if (threshold > perTx) throw new Error("Fast-approval limit cannot exceed the per-request cap");
+    if (threshold !== 0n) {
+      throw new Error("Fast approval is disabled until structured merchant and evidence rules are available. Set the fast-approval limit to 0.");
+    }
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
     const payloadHash = hashActionPayload([

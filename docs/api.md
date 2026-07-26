@@ -185,7 +185,7 @@ Field rules:
 {
   "request_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "verdict": "approved",
-  "reasoning": "Within auto-approve threshold",
+  "reasoning": "The request matches the exact recipient and policy",
   "request": {
     "request_id": "0x...",
     "recipient": "0x...",
@@ -194,6 +194,7 @@ Field rules:
     "category": "software",
     "justification": "Production API renewal invoice INV-4471",
     "verdict": "approved",
+    "decision_mode": "prompt_comparative",
     "status": "executed",
     "execution_status": "executed",
     "execution_error": "",
@@ -201,6 +202,18 @@ Field rules:
     "explorer_url": "https://sepolia.basescan.org/tx/0x...",
     "created_at": "2026-07-21T12:00:00.000Z",
     "updated_at": "2026-07-21T12:01:00.000Z"
+  },
+  "chain": {
+    "chain_id": 84532,
+    "name": "Base Sepolia",
+    "explorer_url": "https://sepolia.basescan.org"
+  },
+  "idempotent_replay": false,
+  "execution": {
+    "mode": "erc7710",
+    "task_id": "relayer-task-id",
+    "fee_amount": "0.01",
+    "fee_amount_units": "10000"
   },
   "genlayer": {
     "request_tx_hash": "0x...",
@@ -215,6 +228,21 @@ The HTTP response can still be `200` when policy evaluation succeeded but
 payout execution failed. Inspect `request.execution_status` and
 `request.execution_error`. Do not create a replacement request; the retry worker
 uses the same on-chain request ID.
+
+`idempotent_replay: true` means the API returned an existing on-chain request.
+No new GenLayer request or payout was submitted. The original request ID and
+Base transaction hash remain in `request`.
+
+`decision_mode` values:
+
+| Value | Meaning |
+| --- | --- |
+| `deterministic` | A cap, budget, amount, or whitelist rule decided the request |
+| `prompt_comparative` | GenLayer prompt-comparative consensus evaluated the policy |
+| `legacy_fast_approval` | A V2 policy skipped semantic review because the amount was below its limit |
+
+Treat `legacy_fast_approval` as a migration warning. Policy V3 requires a zero
+fast-approval limit and sends every request through prompt-comparative review.
 
 ## 5. Idempotency
 
@@ -243,6 +271,11 @@ Example:
   "policy": "0x...",
   "delegated_account": "0x...",
   "chain_id": 84532,
+  "chain": {
+    "chain_id": 84532,
+    "name": "Base Sepolia",
+    "explorer_url": "https://sepolia.basescan.org"
+  },
   "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   "token_symbol": "USDC",
   "token_decimals": 6,
@@ -252,14 +285,41 @@ Example:
   "weekly_spent_units": "50000000",
   "weekly_cap": "100",
   "weekly_cap_units": "100000000",
+  "weekly_available": "50",
   "per_tx_cap": "25",
-  "per_tx_cap_units": "25000000"
+  "per_tx_cap_units": "25000000",
+  "security": {
+    "contract_version": "3",
+    "semantic_review_required_for_all_requests": true,
+    "legacy_fast_approval_active": false,
+    "warnings": []
+  }
 }
 ```
 
-The balance is read from the delegated account’s ERC-20 balance. It is not an authorization decision; the policy caps and active registry binding remain authoritative.
+The balance is read from the delegated account's ERC-20 balance. It is not an
+authorization decision; the policy caps and active registry binding remain
+authoritative. `weekly_available` is policy budget remaining and currently
+excludes the 1Shot fee.
 
-## 7. History
+## 7. Merchant identity and evidence
+
+`category` and `justification` are untrusted agent claims. They do not prove
+that a recipient belongs to a merchant or that an invoice is genuine.
+
+For the current API:
+
+- include the exact permitted recipient address in the policy text;
+- enable the recipient whitelist;
+- include a specific invoice or billing reference in the justification;
+- set every legacy V2 fast-approval limit to `0`;
+- do not rely on a merchant name alone.
+
+Evidence-backed invoice, domain, and signature verification is planned for API
+V2. Until that exists, a rule such as "pay Vercel only" without an exact
+recipient binding is not sufficient for production funds.
+
+## 8. History
 
 ```http
 GET /api/v1/history?limit=50
@@ -286,7 +346,7 @@ Status meanings:
 | `failed` | Relay failed; retry is allowed after lease release |
 | `executed` | EVM tx hash recorded on-chain |
 
-## 8. Errors
+## 9. Errors
 
 Every error has:
 
@@ -339,7 +399,7 @@ Retry only `502` and `503` responses automatically. Use exponential backoff
 with jitter and always reuse the same `idempotency_key`. After an ambiguous
 timeout, query history or the request endpoint before another POST.
 
-## 9. Minimal clients
+## 10. Minimal clients
 
 ```bash
 curl -sS "$BASE/api/v1/balance" \
@@ -380,7 +440,7 @@ const result = await response.json();
 if (!response.ok) throw new Error(`${result.error}: ${result.message}`);
 ```
 
-## 10. Security rules for agent developers
+## 11. Security rules for agent developers
 
 - Store the API key in a secret manager or environment variable.
 - Never place it in source control, browser code, URLs, analytics, or prompts.
@@ -391,3 +451,14 @@ if (!response.ok) throw new Error(`${result.error}: ${result.message}`);
 - Validate the recipient independently before submitting.
 - Rotate the key immediately after accidental disclosure.
 - Treat `tx_hash` as authoritative only when `execution_status` is `executed`.
+- Treat `category` and `justification` as descriptions, not merchant evidence.
+- Reject or escalate policies whose `security.warnings` array is non-empty.
+
+## 12. Verified live behavior
+
+The July 26, 2026 Base Sepolia test verified policy denial,
+prompt-comparative approval, 1Shot execution, EVM receipt success, GenLayer
+transaction-hash recording, history retrieval, and idempotent replay with no
+duplicate payment. It also exposed the merchant-identity and legacy
+fast-approval issues above. See
+[the live policy test report](live-policy-test-2026-07-26.md).

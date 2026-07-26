@@ -136,6 +136,7 @@ function apiCode(message: string) {
     || value.includes("invalid request id")
     || value.includes("invalid spend payload")
     || value.includes("history limit")
+    || value.includes("fast approval is disabled")
   ) return ["invalid_request", 422] as const;
   return ["request_failed", 400] as const;
 }

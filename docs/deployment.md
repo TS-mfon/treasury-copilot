@@ -124,9 +124,10 @@ the policy's `execution_reporter`; the GenLayer transaction signature is the
 platform authorization. The contract also requires the registered agent in
 `on_behalf_of`.
 
-### Example A: auto-approved request
+### Example A: prompt-comparative approval
 
-Amount below the auto-approval threshold. Expected result:
+Policy V3 requires `auto_approve_threshold_atto=0`, so even a small valid
+request receives prompt-comparative review. Expected result:
 
 ```text
 FINALIZED
@@ -256,7 +257,7 @@ Finalized request evidence:
 
 | Case | Request ID | Verdict | Reason |
 | --- | --- | --- | --- |
-| 4 USDC | `0xa950cc8c9896290e9d4ad01c12244ef04f248c2c85f40ed5fbf498f7648997a5` | approved | Within auto-approve threshold |
+| 4 USDC, legacy V2 | `0xa950cc8c9896290e9d4ad01c12244ef04f248c2c85f40ed5fbf498f7648997a5` | approved | Within auto-approve threshold |
 | 26 USDC | `0xd1b3316a7c4b6dc31399f2ff70a601b76339d70ac39a0458b70e1456a5dfbf40` | denied | Exceeds per-transaction cap |
 | 10 USDC | `0x83cf8da66ae1d0384ed67ba05b7da530aebc1cfc7550bc74cfcfd13090db3677` | approved | Legitimate cloud observability infrastructure expense |
 
@@ -335,7 +336,7 @@ The Vercel schedule is a recovery mechanism. The spend route attempts immediate 
 3. Open setup and confirm Base Sepolia/USDC.
 4. Verify unsupported wallets receive the ERC-7715 capability error before signing.
 5. Configure a real delegation with a small test amount.
-6. Create one auto-approved API request.
+6. Create one small prompt-comparative API request.
 7. Poll `/api/v1/requests/:id`.
 8. Confirm `tx_hash` and explorer link.
 9. Test a denied cap request.

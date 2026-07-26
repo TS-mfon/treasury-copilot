@@ -30,6 +30,7 @@ export interface OneShotExecutionResult {
   raw: unknown;
   mode: "erc7710" | "direct";
   task_id?: string;
+  fee_amount_units?: string;
 }
 
 function oneShotRpcUrl() {
@@ -284,7 +285,13 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
   const taskId = typeof sendResult === "string" ? sendResult : (sendResult.taskId ?? sendResult.result ?? sendResult.id);
   if (!taskId) throw new Error(`1Shot send response missing task id: ${JSON.stringify(sendResult).slice(0, 240)}`);
   const txHash = await pollStatus(taskId);
-  return { tx_hash: txHash, raw: { taskId, relayerTarget, feeCollector, sendResult }, mode: "erc7710", task_id: taskId };
+  return {
+    tx_hash: txHash,
+    raw: { taskId, relayerTarget, feeCollector, sendResult },
+    mode: "erc7710",
+    task_id: taskId,
+    fee_amount_units: initialEstimate.requiredPaymentAmount,
+  };
 }
 
 export async function executeOneShot(body: OneShotRelayRequest): Promise<OneShotExecutionResult> {

@@ -156,7 +156,7 @@ The owner controls:
 - the execution network and token;
 - the weekly delegated amount;
 - the per-request cap;
-- the automatic approval threshold;
+- the legacy fast-approval limit, which should remain zero until structured evidence rules exist;
 - the recipient whitelist;
 - the policy text;
 - API-key rotation and revocation.
@@ -343,7 +343,7 @@ It stores:
 - EVM chain ID;
 - per-request cap;
 - weekly cap;
-- automatic approval threshold;
+- legacy fast-approval limit;
 - policy text;
 - optional recipient whitelist;
 - weekly reservation accounting;
@@ -402,10 +402,10 @@ In Treasury Copilot:
 
 - hard security rules such as identity, caps, weekly budget, whitelist, and
   replay protection are checked deterministically;
-- requests at or below the auto-approve threshold can bypass model review only
-  after those hard checks pass;
-- requests above that threshold but within the hard limits can be evaluated
-  under the policy;
+- policy V3 sends every request through prompt-comparative review after hard
+  checks pass;
+- legacy V2 policies with a nonzero fast-approval limit are flagged because
+  small requests can bypass semantic review;
 - the application waits for GenLayer finality before payment execution.
 
 In simple terms, GenLayer acts as the independent jury that determines whether
@@ -416,21 +416,23 @@ Official references:
 - [Equivalence Principle](https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle)
 - [Optimistic Democracy and the Equivalence Principle](https://docs.genlayer.com/understand-genlayer-protocol/core-concepts/optimistic-democracy/equivalence-principle)
 
-### Auto-Approve Threshold
+### Fast Approval Safety
 
-The auto-approve threshold is not another delegation and does not increase the
-agent's spending authority.
+The legacy fast-approval limit is not another delegation and does not increase
+the agent's spending authority. It did, however, allow V2 requests below the
+limit to bypass semantic policy review.
 
 Example policy:
 
 - Weekly delegated amount: `100 USDC`
 - Per-request cap: `25 USDC`
-- Auto-approve threshold: `5 USDC`
+- Fast-approval limit: `0 USDC`
 
-A valid `3 USDC` request can be approved automatically after all deterministic
-checks pass. A `10 USDC` request remains within the hard cap but can be sent
-through policy evaluation. A `26 USDC` request is denied because it exceeds the
-per-request cap.
+Policy V3 sends both a `3 USDC` request and a `10 USDC` request through
+prompt-comparative policy evaluation after deterministic checks. A `26 USDC`
+request is denied before model review because it exceeds the per-request cap.
+Fast approval returns only after structured merchant, recipient, category, and
+evidence rules can establish compliance without trusting agent text.
 
 ### 1Shot Relayer
 
@@ -530,7 +532,7 @@ rail. They are not used by the current production ERC-7715 execution path.
 5. Enter the agent's EVM address and weekly delegated amount.
 6. Grant the periodic USDC execution permission in MetaMask.
 7. Keep a small native ETH balance available for wallet account setup.
-8. Configure the per-request cap, auto-approve threshold, policy text, and
+8. Configure the per-request cap, zero fast-approval limit, policy text, and
    optional recipient whitelist.
 9. Sign the fresh owner setup authorization.
 10. The platform deploys or resumes the matching GenLayer policy.
@@ -930,7 +932,7 @@ The production flow has been validated with real requests.
 - Request ID:
   `0xd607a87547aa9aa2afb3867235a3e47780f58f28c36eb70575f9f233ce6e29c7`
 - Verdict: approved
-- Reason: within auto-approve threshold
+- Reason: within auto-approve threshold on the historical V2 policy
 - GenLayer request transaction:
   `0xb40ff135f9d2e7206826c00fefbdad9c0433990a6e60536c3ca2dd4274532eae`
 - Base Sepolia payout:
@@ -943,6 +945,13 @@ The production flow has been validated with real requests.
 
 Repeating the same request with the same idempotency key returned the same
 request ID and Base transaction hash. No second payment occurred.
+
+The July 26, 2026 merchant-restricted policy test also verified one OpenAI
+denial and one Vercel-labeled approval/execution. It exposed that merchant names
+in category and justification fields are claims rather than proof. Policy V3
+therefore disables fast approval and requires prompt-comparative review for
+every request until exact recipient and evidence-backed rules are available.
+See [the live policy test report](docs/live-policy-test-2026-07-26.md).
 
 ### Deterministic denial
 

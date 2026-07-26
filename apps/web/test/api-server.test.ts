@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AgentApiKeyClaims } from "../src/lib/apiAuth";
-import { assertPolicyMatchesApiKey, parseSpendPayload, publicPolicyState } from "../src/lib/apiServer";
+import {
+  assertPolicyMatchesApiKey,
+  chainToApi,
+  parseSpendPayload,
+  policySecurityProfile,
+  publicPolicyState,
+  requestToApi,
+} from "../src/lib/apiServer";
 
 const address = (digit: string) => `0x${digit.repeat(40)}` as `0x${string}`;
 const platformKey = `0x${"99".repeat(32)}` as const;
@@ -87,4 +94,45 @@ test("agent policy responses redact executable delegation secrets", () => {
   assert.equal(state.per_tx_cap_atto, "25000000");
   assert.equal("delegation_payload" in state, false);
   assert.equal("delegation_context" in state, false);
+});
+
+test("legacy fast approval is surfaced as an explicit security warning", () => {
+  const profile = policySecurityProfile({
+    contract_version: "2",
+    auto_approve_threshold_atto: "5000000",
+    delegation_registered: true,
+  });
+  assert.equal(profile.legacy_fast_approval_active, true);
+  assert.equal(profile.semantic_review_required_for_all_requests, false);
+  assert.match(profile.warnings[0] ?? "", /without semantic policy review/);
+});
+
+test("policy V3 requires semantic review for every request", () => {
+  const profile = policySecurityProfile({
+    contract_version: "3",
+    auto_approve_threshold_atto: "0",
+    delegation_registered: true,
+  });
+  assert.equal(profile.legacy_fast_approval_active, false);
+  assert.equal(profile.semantic_review_required_for_all_requests, true);
+  assert.deepEqual(profile.warnings, []);
+});
+
+test("request responses include chain metadata and decision mode", () => {
+  const response = requestToApi({
+    request_id: `0x${"a".repeat(64)}`,
+    recipient: address("6"),
+    amount_atto: "5000001",
+    category: "vercel_subscription",
+    justification: "Pay a verified Vercel invoice",
+    verdict: "approved",
+    reasoning: "Matches the exact recipient in policy",
+    tx_hash: "",
+    created_at: "2026-07-26T12:00:00Z",
+    finalized: true,
+  }, 6, 84532);
+
+  assert.equal(response.decision_mode, "prompt_comparative");
+  assert.equal(response.chain?.name, "Base Sepolia");
+  assert.equal(chainToApi(8453).name, "Base Mainnet");
 });

@@ -85,17 +85,29 @@ export default function DocsPage() {
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{`{
   "request_id": "0x...",
   "verdict": "approved",
-  "reasoning": "Within auto-approve threshold",
+  "reasoning": "The request matches the exact recipient and policy",
   "request": {
     "status": "executed",
     "recipient": "0x...",
     "amount": "25",
     "amount_units": "25000000",
+    "decision_mode": "prompt_comparative",
     "execution_status": "executed",
     "tx_hash": "0x...",
     "explorer_url": "https://sepolia.basescan.org/tx/0x...",
     "created_at": "2026-07-21T12:10:00.000Z",
     "updated_at": "2026-07-21T12:11:00.000Z"
+  },
+  "chain": {
+    "chain_id": 84532,
+    "name": "Base Sepolia",
+    "explorer_url": "https://sepolia.basescan.org"
+  },
+  "idempotent_replay": false,
+  "execution": {
+    "mode": "erc7710",
+    "fee_amount": "0.01",
+    "fee_amount_units": "10000"
   },
   "genlayer": {
     "request_tx_hash": "0x...",
@@ -115,6 +127,16 @@ export default function DocsPage() {
             <p className="mt-2 text-neutral-400">Returns on-chain request history from GenLayer for the current API key binding. Includes status, verdict, reasoning, and execution hash when available.</p>
             <pre className="terminal mt-4 overflow-auto p-4 text-xs">{historyExample}</pre>
           </div>
+        </section>
+
+        <section className="panel rounded-lg p-6">
+          <h2 className="text-xl font-semibold">Merchant identity and policy safety</h2>
+          <p className="mt-2 text-neutral-400">
+            Category and justification are untrusted agent claims. A merchant name does not prove recipient ownership or invoice validity. Put the exact approved recipient address in the policy, enable the recipient whitelist, and set every legacy V2 fast approval limit to zero.
+          </p>
+          <p className="mt-3 text-neutral-400">
+            Policy V3 uses GenLayer prompt-comparative review for every amount. Evidence-backed invoice and merchant verification is required before safe fast approval can return.
+          </p>
         </section>
 
         <section className="panel rounded-lg p-6">
@@ -146,6 +168,9 @@ export default function DocsPage() {
           </div>
           <p className="mt-4 text-sm text-neutral-400">
             If the spend request times out at the HTTP layer, poll GET /api/v1/requests/:id with the same API key. Do not submit a different idempotency key for the same intended payment.
+          </p>
+          <p className="mt-3 text-sm text-neutral-400">
+            An identical replay returns <span className="font-mono">idempotent_replay: true</span>, the same request ID, and the same Base transaction hash without another payment.
           </p>
         </section>
 

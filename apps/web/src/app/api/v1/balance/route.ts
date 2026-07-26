@@ -1,6 +1,6 @@
 import { formatUnits } from "viem";
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { assertPolicyMatchesApiKey, assertRegistryBinding, readPolicyState } from "@/lib/apiServer";
+import { assertPolicyMatchesApiKey, assertRegistryBinding, chainToApi, policySecurityProfile, readPolicyState } from "@/lib/apiServer";
 import { erc20Abi, chainById } from "@treasury-copilot/shared";
 import { createPublicClient, http } from "viem";
 import { apiErrorResponse } from "@/lib/errors";
@@ -29,6 +29,7 @@ export async function GET(request: Request) {
       policy: claims.policy,
       delegated_account: claims.delegatedAccount,
       chain_id: claims.chainId,
+      chain: chainToApi(claims.chainId),
       token: claims.token,
       token_symbol: claims.tokenSymbol,
       token_decimals: decimals,
@@ -38,8 +39,15 @@ export async function GET(request: Request) {
       weekly_spent_units: policy.weekly_spent_atto ?? "0",
       weekly_cap: formatUnits(BigInt(policy.weekly_cap_atto ?? "0"), decimals),
       weekly_cap_units: policy.weekly_cap_atto ?? "0",
+      weekly_available: formatUnits(
+        BigInt(policy.weekly_cap_atto ?? "0") > BigInt(policy.weekly_spent_atto ?? "0")
+          ? BigInt(policy.weekly_cap_atto ?? "0") - BigInt(policy.weekly_spent_atto ?? "0")
+          : 0n,
+        decimals,
+      ),
       per_tx_cap: formatUnits(BigInt(policy.per_tx_cap_atto ?? "0"), decimals),
       per_tx_cap_units: policy.per_tx_cap_atto ?? "0",
+      security: policySecurityProfile(policy),
     });
   } catch (error) {
     return apiErrorResponse(error);

@@ -52,7 +52,7 @@ export default function SetupPage() {
   const [agentAddress, setAgentAddress] = useState("");
   const [weeklyCap, setWeeklyCap] = useState("100");
   const [perTxCap, setPerTxCap] = useState("25");
-  const [threshold, setThreshold] = useState("5");
+  const [threshold] = useState("0");
   const [whitelist, setWhitelist] = useState("");
   const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
@@ -348,10 +348,10 @@ export default function SetupPage() {
               <input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} />
             </label>
             <label className="grid gap-2 text-sm font-medium">
-              Auto-approve limit {tokenSymbol}
-              <input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+              Fast approval limit {tokenSymbol}
+              <input className="field" value={threshold} disabled />
               <span className="text-xs font-normal leading-5 text-neutral-500">
-                Requests at or below this amount are approved automatically after cap and whitelist checks. Larger requests go through the GenLayer policy review.
+                Disabled for policy V3. Every request receives GenLayer prompt-comparative review until structured recipient and evidence rules make fast approval safe.
               </span>
             </label>
           </div>

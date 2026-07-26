@@ -102,7 +102,7 @@ async function matchingPolicy(owner: Address, body: ReturnType<typeof parseBody>
     ) {
       const policyAddress = policy as Address;
       const state = await readPolicyState(policyAddress);
-      if (state.contract_version === "2") {
+      if (state.contract_version === "3") {
         return { policy: policyAddress, legacyPolicies };
       }
       legacyPolicies.push(policyAddress);
@@ -134,7 +134,10 @@ export async function POST(request: Request) {
     const perTx = amountToUnits(body.perTxCap, token.decimals);
     const weekly = amountToUnits(body.weeklyCap, token.decimals);
     const threshold = amountToUnits(body.threshold, token.decimals);
-    if (threshold > perTx) throw new Error("Auto-approve threshold cannot exceed the per-request cap");
+    if (threshold > perTx) throw new Error("Fast-approval limit cannot exceed the per-request cap");
+    if (threshold !== 0n) {
+      throw new Error("Fast approval is disabled until structured merchant and evidence rules are available. Set the fast-approval limit to 0.");
+    }
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
     const platform = platformAccount().address;
