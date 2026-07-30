@@ -42,7 +42,6 @@ export default function PolicyPage() {
   const [selectedPolicy, setSelectedPolicy] = useState("");
   const [perTxCap, setPerTxCap] = useState("");
   const [weeklyCap, setWeeklyCap] = useState("");
-  const [threshold, setThreshold] = useState("");
   const [policyText, setPolicyText] = useState("");
   const [whitelistEnabled, setWhitelistEnabled] = useState(false);
   const [whitelistRecipient, setWhitelistRecipient] = useState("");
@@ -73,7 +72,6 @@ export default function PolicyPage() {
     const decimals = Number(selected.binding.token_decimals);
     setPerTxCap(formatUnits(BigInt(selected.state.per_tx_cap_atto), decimals));
     setWeeklyCap(formatUnits(BigInt(selected.state.weekly_cap_atto), decimals));
-    setThreshold(formatUnits(BigInt(selected.state.auto_approve_threshold_atto), decimals));
     setPolicyText(selected.state.policy_text);
     setWhitelistEnabled(Boolean(selected.state.whitelist_enabled));
   }, [selected]);
@@ -90,7 +88,7 @@ export default function PolicyPage() {
       const decimals = Number(selected.binding.token_decimals);
       const perTxUnits = parseTokenAmount(perTxCap, decimals);
       const weeklyUnits = parseTokenAmount(weeklyCap, decimals);
-      const thresholdUnits = parseTokenAmount(threshold, decimals);
+      const thresholdUnits = 0n;
       const nonce = BigInt(selected.state.policy_nonce);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
       const payloadHash = hashActionPayload([
@@ -123,7 +121,7 @@ export default function PolicyPage() {
           token_decimals: decimals,
           per_tx_cap: perTxCap,
           weekly_cap: weeklyCap,
-          auto_approve_threshold: threshold,
+          auto_approve_threshold: "0",
           policy_text: policyText,
           nonce: nonce.toString(),
           deadline: deadline.toString(),
@@ -220,17 +218,13 @@ export default function PolicyPage() {
               ))}
             </select>
           </label>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2 text-sm font-medium">Per-request cap<input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} /></label>
             <label className="grid gap-2 text-sm font-medium">Weekly cap<input className="field" value={weeklyCap} onChange={(event) => setWeeklyCap(event.target.value)} /></label>
-            <label className="grid gap-2 text-sm font-medium">
-              Fast approval limit
-              <input className="field" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
-            </label>
           </div>
           {BigInt(selected?.state.auto_approve_threshold_atto ?? "0") > 0n && (
             <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
-              This legacy policy can bypass semantic policy review for small requests. Set the fast approval limit to 0. Re-registering the delegation migrates the agent to policy V3, where every request uses GenLayer prompt-comparative review.
+              This legacy policy is blocked from creating new agent requests. Re-register the delegation to migrate to policy V4, which reviews every valid request.
             </p>
           )}
           <label className="grid gap-2 text-sm font-medium">

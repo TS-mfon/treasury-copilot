@@ -116,6 +116,8 @@ function apiCode(message: string) {
   if (value.includes("policy") && value.includes("inactive")) return ["policy_inactive", 403] as const;
   if (value.includes("unknown request") || value.includes("request not found")) return ["request_not_found", 404] as const;
   if (value.includes("idempotency")) return ["idempotency_conflict", 409] as const;
+  if (value.includes("policy migration required")) return ["policy_migration_required", 409] as const;
+  if (value.includes("evidence") || value.includes("invoice")) return ["invalid_evidence", 422] as const;
   if (value.includes("amount") || value.includes("decimal")) return ["invalid_amount", 422] as const;
   if (value.includes("insufficient") || value.includes("balance")) return ["insufficient_balance", 422] as const;
   if (value.includes("undetermined") || value.includes("validator") || value.includes("consensus")) return ["genlayer_undetermined", 503] as const;

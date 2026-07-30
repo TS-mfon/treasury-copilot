@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createAccount, createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
-import { TransactionStatus } from "genlayer-js/types";
+import { TransactionHashVariant, TransactionStatus } from "genlayer-js/types";
 import type { Address, Hex } from "viem";
 import { canonicalGenLayerAddress } from "@/lib/genlayerAddress";
 import { errorMessage } from "@/lib/errors";
@@ -41,6 +41,18 @@ export function assertGenLayerExecutionSucceeded(
   receipt: Record<string, unknown>,
   operation: string,
 ) {
+  const consensusResult = String(
+    receipt.resultName
+    ?? receipt.result_name
+    ?? "",
+  ).toUpperCase();
+  if (
+    consensusResult.includes("MAJORITY_DISAGREE")
+    || consensusResult.includes("UNDETERMINED")
+  ) {
+    throw new Error(`${operation} failed on GenLayer: ${consensusResult}`);
+  }
+
   const directExecution = String(
     receipt.txExecutionResultName
     ?? receipt.tx_execution_result_name
@@ -92,13 +104,35 @@ export async function genlayerRead<T>(
   address: Address,
   functionName: string,
   args: unknown[] = [],
+  state: "latest" | "finalized" = "latest",
 ) {
   return await client().readContract({
     address: canonicalGenLayerAddress(address),
     functionName,
     args: args as never[],
     jsonSafeReturn: true,
+    transactionHashVariant: state === "finalized"
+      ? TransactionHashVariant.LATEST_FINAL
+      : TransactionHashVariant.LATEST_NONFINAL,
   }) as T;
+}
+
+export async function genlayerSubmitWrite(
+  address: Address,
+  functionName: string,
+  args: unknown[] = [],
+) {
+  try {
+    return await client().writeContract({
+      account: account(),
+      address: canonicalGenLayerAddress(address),
+      functionName,
+      args: args as never[],
+      value: 0n,
+    }) as Hex;
+  } catch (error) {
+    throw new Error(`${functionName} submission failed on GenLayer: ${errorMessage(error)}`);
+  }
 }
 
 export async function genlayerWrite(
@@ -136,8 +170,12 @@ export async function genlayerWrite(
   assertGenLayerExecutionSucceeded(rawReceipt, functionName);
   const resultName = String(rawReceipt.resultName ?? rawReceipt.result_name ?? "");
   const statusName = String(rawReceipt.statusName ?? rawReceipt.status_name ?? "");
-  if (statusName === "UNDETERMINED" || resultName === "UNDETERMINED") {
-    throw new Error(`${functionName} hit UNDETERMINED`);
+  if (
+    statusName === "UNDETERMINED"
+    || resultName === "UNDETERMINED"
+    || resultName === "MAJORITY_DISAGREE"
+  ) {
+    throw new Error(`${functionName} failed consensus: ${resultName || statusName}`);
   }
   const executionResult = String(rawReceipt.txExecutionResultName ?? rawReceipt.execution_result ?? "");
   if (executionResult.includes("ERROR")) {

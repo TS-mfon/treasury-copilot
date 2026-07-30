@@ -104,7 +104,7 @@ genlayer deploy \
   84532 \
   25000000 \
   100000000 \
-  5000000 \
+  0 \
   "Routine software and infrastructure spending only." \
   none
 ```
@@ -126,7 +126,7 @@ platform authorization. The contract also requires the registered agent in
 
 ### Example A: prompt-comparative approval
 
-Policy V3 requires `auto_approve_threshold_atto=0`, so even a small valid
+Policy V4 requires `auto_approve_threshold_atto=0`, so even a small valid
 request receives prompt-comparative review. Expected result:
 
 ```text
@@ -150,14 +150,14 @@ reasoning contains per-transaction cap
 
 ### Example C: policy-evaluated request
 
-Amount above the auto-approval threshold but below the cap. Expected result:
+Amount below the cap and within the policy budget. Expected result:
 
 ```text
 FINALIZED
 execution success
 verdict=approved or denied according to validator consensus
 reasoning is present
-finalized=true only after the finalized receipt marker
+finalized=true after the `review_request` transaction finalizes
 ```
 
 For each transaction, record:
@@ -207,6 +207,32 @@ Both `GENLAYER_REGISTRY` and `NEXT_PUBLIC_GENLAYER_REGISTRY` must point to the
 July 25 registry. The owner can reuse a still-loaded MetaMask weekly grant
 because the platform delegate did not change. A browser refresh discards the
 in-memory grant and requires the permission request to be opened again.
+
+### Active policy V4 deployment: July 30, 2026
+
+The current owner-agent binding uses:
+
+```text
+Policy:
+0xBF9Aa94fD73a883Be48B381b41eB7619181BD9fA
+
+Policy deployment:
+0x3840cfba4ef892bf5688535bd5f6ff8396b813c1b92c7f050e18e9cd3e11872a
+
+Registry registration:
+0xadc7156be2672060c9fd454a3a12682c382939fc912c513e380956c0c2003a31
+
+Superseded V4 deactivation:
+0x7975e936c3f2889c065db374d516382e02bef62d46b4ebbc0d04a7bcc889e6ae
+```
+
+All three transactions reached `FINALIZED` with successful contract execution.
+The active binding uses owner
+`0xEd9EDd8586b20524CafA4F568413C504C9B03172`, agent
+`0xD8a4724A8F0a7c9a028Ff10527Ea354eC82fE791`, Base Sepolia chain `84532`,
+canonical test USDC, and platform reporter
+`0x1072e78B72840BbC921493ea1C97dC5CAA54598F`. Its fast-approval threshold is
+zero and every valid request is queued for prompt-comparative review.
 
 ### Delegation-policy binding
 
@@ -299,7 +325,13 @@ NEXT_PUBLIC_ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
 
 The operator address must equal the address derived from `AGENT_SIGNER_PRIVATE_KEY`. The registry address must be the fresh successful deployment.
 
-Base Mainnet configuration is environment-aware but must remain execution-disabled until `relayer_getCapabilities(["8453"])` returns a valid target address, fee collector, and USDC token entry. On July 24, 2026, the live 1Shot endpoint returned an empty capability object for Base Mainnet and a valid USDC capability for Base Sepolia.
+On July 30, 2026, the production 1Shot endpoint advertised Base Mainnet chain
+`8453`, canonical USDC, target
+`0x26a529124f0bbf9af9d8f9f84a43efe47cf1199a`, and fee collector
+`0xE936e8FAf4A5655469182A49a505055B71C17604`. Mainnet remains disabled in this
+release because the approved architecture also requires a separate Mainnet
+registry, gateway, reporter, EVM executor, API secrets, and cron worker. A live
+relayer capability alone is not sufficient to enable real-fund execution.
 
 Deploy:
 
@@ -325,9 +357,16 @@ vercel inspect https://YOUR_DEPLOYMENT.vercel.app
 
 ## 8. Cron and relay
 
-`/api/cron/execute` requires `Authorization: Bearer $CRON_SECRET`. It only scans finalized approved requests and revalidates policy/registry identity before execution. The standalone `apps/relay` process only calls this authenticated endpoint at `/run`; it does not accept recipient, amount, delegation, or policy payloads.
+`/api/cron/execute` requires `Authorization: Bearer $CRON_SECRET`. It scans
+finalized queued requests, submits prompt-comparative review transactions, and
+executes only finalized approvals after revalidating the policy and registry
+binding. The standalone `apps/relay` process only calls this authenticated
+endpoint at `/run`; it does not accept recipient, amount, delegation, or policy
+payloads.
 
-The Vercel schedule is a recovery mechanism. The spend route attempts immediate execution after finality, so the system does not depend on a daily cron for normal operation.
+The Vercel schedule runs every minute. `POST /api/v1/spend` returns `202`
+immediately after queue submission; review and approved execution are
+asynchronous worker responsibilities.
 
 ## 9. Post-deploy smoke
 

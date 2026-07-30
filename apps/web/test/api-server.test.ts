@@ -65,6 +65,7 @@ test("spend payload bounds idempotency and prompt inputs", () => {
 
 test("policy binding rejects cross-agent and cross-funding claims", () => {
   const matching = {
+    contract_version: "4",
     authorized_agent: claims.agent,
     delegated_account: claims.delegatedAccount,
     token_address: claims.token,
@@ -72,6 +73,7 @@ test("policy binding rejects cross-agent and cross-funding claims", () => {
     execution_reporter: platform.address,
     delegation_registered: true,
     delegation_payload: { context: "0x01" },
+    auto_approve_threshold_atto: "0",
   };
   assert.doesNotThrow(() => assertPolicyMatchesApiKey(matching, claims));
   assert.throws(() => assertPolicyMatchesApiKey({ ...matching, authorized_agent: address("7") }, claims), /agent/);
@@ -115,7 +117,22 @@ test("policy V3 requires semantic review for every request", () => {
   });
   assert.equal(profile.legacy_fast_approval_active, false);
   assert.equal(profile.semantic_review_required_for_all_requests, true);
-  assert.deepEqual(profile.warnings, []);
+  assert.equal(profile.asynchronous_review_supported, false);
+  assert.match(profile.warnings[0] ?? "", /migrated to V4/);
+});
+
+test("legacy policies are blocked from asynchronous agent spending", () => {
+  assert.throws(() => assertPolicyMatchesApiKey({
+    contract_version: "3",
+    authorized_agent: claims.agent,
+    delegated_account: claims.delegatedAccount,
+    token_address: claims.token,
+    evm_chain_id: String(claims.chainId),
+    execution_reporter: platform.address,
+    delegation_registered: true,
+    delegation_payload: { context: "0x01" },
+    auto_approve_threshold_atto: "0",
+  }, claims), /Policy migration required/);
 });
 
 test("request responses include chain metadata and decision mode", () => {

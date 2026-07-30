@@ -342,19 +342,15 @@ export default function SetupPage() {
 
         <section className="panel rounded-lg p-5">
           <h2 className="text-lg font-semibold">3. GenLayer policy</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 grid gap-4">
             <label className="grid gap-2 text-sm font-medium">
               Per-request cap {tokenSymbol}
               <input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} />
             </label>
-            <label className="grid gap-2 text-sm font-medium">
-              Fast approval limit {tokenSymbol}
-              <input className="field" value={threshold} disabled />
-              <span className="text-xs font-normal leading-5 text-neutral-500">
-                Disabled for policy V3. Every request receives GenLayer prompt-comparative review until structured recipient and evidence rules make fast approval safe.
-              </span>
-            </label>
           </div>
+          <p className="mt-3 text-xs leading-5 text-neutral-500">
+            Every valid request receives GenLayer prompt-comparative review. Treasury Copilot has no fast-approval bypass.
+          </p>
           <label className="mt-4 grid gap-2 text-sm font-medium">
             Optional recipient whitelist
             <input className="field" value={whitelist} onChange={(event) => setWhitelist(event.target.value)} placeholder="0xabc...,0xdef..." />

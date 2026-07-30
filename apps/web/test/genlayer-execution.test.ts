@@ -36,6 +36,20 @@ test("GenLayer rollback payload is preserved in the surfaced operation error", (
   );
 });
 
+test("finalized majority disagreement is not treated as committed state", () => {
+  assert.throws(() => assertGenLayerExecutionSucceeded({
+    status_name: "FINALIZED",
+    result_name: "MAJORITY_DISAGREE",
+    consensus_data: {
+      leader_receipt: [{
+        execution_result: "SUCCESS",
+        mode: "leader",
+        result: { status: "return", payload: { verdict: "approved" } },
+      }],
+    },
+  }, "review_request"), /MAJORITY_DISAGREE/);
+});
+
 test("successful finalized GenLayer receipts pass execution validation", () => {
   assert.doesNotThrow(() => assertGenLayerExecutionSucceeded({
     status_name: "FINALIZED",

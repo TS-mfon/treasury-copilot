@@ -1,6 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
 import { isAddress, type Address, type Hex } from "viem";
-import { executeApprovedPolicyRequest, listPolicyRequests, readPolicyRequest } from "@/lib/apiServer";
+import {
+  executeApprovedPolicyRequest,
+  listPolicyRequests,
+  readPolicyRequest,
+  reviewQueuedPolicyRequest,
+} from "@/lib/apiServer";
 import { genlayerRead } from "@/lib/genlayerServer";
 
 export const runtime = "nodejs";
@@ -20,17 +25,27 @@ export async function GET(request: Request) {
     if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
     const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
     if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
-    const policies = await genlayerRead<string[]>(registry as Address, "list_policies");
+    const policies = await genlayerRead<string[]>(registry as Address, "list_policies", [], "finalized");
+    const reviewed: string[] = [];
     const completed: string[] = [];
     const failed: Array<{ request_id: string; error: string }> = [];
     for (const rawPolicy of policies.slice(0, 50)) {
       if (!isAddress(rawPolicy)) continue;
       const policy = rawPolicy as Address;
-      const requestIds = await listPolicyRequests(policy);
+      const requestIds = await listPolicyRequests(policy, "finalized");
       for (const rawRequestId of requestIds.slice(-25)) {
-        const requestState = await readPolicyRequest(policy, rawRequestId);
-        if (!requestState.finalized || requestState.verdict !== "approved" || requestState.tx_hash || !["ready", "failed", "approved_pending_execution"].includes(requestState.execution_status ?? "")) continue;
+        let requestState = await readPolicyRequest(policy, rawRequestId, "finalized");
         try {
+          if (requestState.verdict === "pending" && requestState.execution_status === "review_pending") {
+            requestState = await reviewQueuedPolicyRequest(policy, rawRequestId as Hex);
+            reviewed.push(rawRequestId);
+          }
+          if (
+            !requestState.finalized
+            || requestState.verdict !== "approved"
+            || requestState.tx_hash
+            || !["ready", "failed", "approved_pending_execution"].includes(requestState.execution_status ?? "")
+          ) continue;
           const result = await executeApprovedPolicyRequest(policy, rawRequestId as Hex);
           completed.push(result.requestId);
         } catch (error) {
@@ -38,7 +53,7 @@ export async function GET(request: Request) {
         }
       }
     }
-    return Response.json({ completed, failed });
+    return Response.json({ reviewed, completed, failed });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Cron execution failed" }, { status: 500 });
   }

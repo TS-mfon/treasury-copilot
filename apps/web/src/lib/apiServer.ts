@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
 import { formatUnits, isAddress, keccak256, stringToHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { chainById } from "@treasury-copilot/shared";
 import type { AgentApiKeyClaims } from "@/lib/apiAuth";
-import { genlayerRead, genlayerWrite } from "@/lib/genlayerServer";
+import { genlayerRead, genlayerSubmitWrite, genlayerWrite } from "@/lib/genlayerServer";
 import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
 import { parseAmount } from "@/lib/amounts";
+import { verifyEvidence } from "@/lib/evidence";
 
 export interface SpendPayload {
   agent: Address;
@@ -13,8 +13,8 @@ export interface SpendPayload {
   amount: string;
   category: string;
   justification: string;
-  requestId?: Hex;
-  idempotencyKey?: string;
+  idempotencyKey: string;
+  evidence?: unknown;
 }
 
 export interface PolicyState {
@@ -34,6 +34,8 @@ export interface PolicyState {
   weekly_spent_atto?: string;
   policy_text?: string;
   policy_nonce?: string;
+  whitelist_enabled?: boolean;
+  whitelisted_recipients?: string[];
 }
 
 export interface RegistryBinding {
@@ -64,6 +66,9 @@ export interface RequestState {
   execution_error?: string;
   execution_claimed_at?: string;
   finalized?: boolean;
+  evidence?: unknown[];
+  evidence_digest?: string;
+  invoice_key?: string;
 }
 
 export function chainToApi(chainId: number) {
@@ -92,6 +97,9 @@ export function policySecurityProfile(policy: PolicyState) {
       "This legacy policy can approve requests at or below its fast-approval limit without semantic policy review. Set the limit to 0 and migrate to policy contract V3.",
     );
   }
+  if (version > 0 && version < 4) {
+    warnings.push("This policy must be migrated to V4 before the asynchronous agent API can accept new spend requests.");
+  }
   if (!policy.delegation_registered) {
     warnings.push("No executable delegation is registered for this policy.");
   }
@@ -99,6 +107,7 @@ export function policySecurityProfile(policy: PolicyState) {
   return {
     contract_version: String(policy.contract_version ?? ""),
     semantic_review_required_for_all_requests: version >= 3,
+    asynchronous_review_supported: version >= 4,
     legacy_fast_approval_active: version > 0 && version < 3 && threshold > 0n,
     warnings,
   };
@@ -122,16 +131,15 @@ export function parseSpendPayload(value: unknown): SpendPayload {
   const category = body.category;
   const justification = body.justification;
   const agent = body.agent ?? body.agent_address;
-  const requestId = body.request_id ?? body.requestId;
   const idempotencyKey = body.idempotency_key ?? body.idempotencyKey;
+  const evidence = body.evidence;
 
   if (typeof agent !== "string" || !isAddress(agent)) throw new Error("agent_address is required and must be a valid address");
   if (typeof recipient !== "string" || !isAddress(recipient)) throw new Error("Invalid recipient");
   if (typeof amount !== "string" || amount.trim() === "") throw new Error("Invalid amount");
   if (typeof category !== "string" || category.trim().length < 2 || category.trim().length > 64) throw new Error("Category must be 2-64 characters");
   if (typeof justification !== "string" || justification.trim().length < 4 || justification.trim().length > 1200) throw new Error("Justification must be 4-1200 characters");
-  if (requestId !== undefined && (typeof requestId !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(requestId))) throw new Error("Invalid request id");
-  if (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))) {
+  if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
     throw new Error("idempotency_key must be 8-128 characters using letters, numbers, dot, underscore, colon, or dash");
   }
 
@@ -141,8 +149,8 @@ export function parseSpendPayload(value: unknown): SpendPayload {
     amount: amount.trim(),
     category: category.trim(),
     justification: justification.trim(),
-    requestId: requestId as Hex | undefined,
-    idempotencyKey: idempotencyKey as string | undefined,
+    idempotencyKey,
+    evidence,
   };
 }
 
@@ -150,11 +158,20 @@ export function amountToUnits(value: string, decimals: number) {
   return parseAmount(value, decimals);
 }
 
+export function deriveRequestId(claims: Pick<AgentApiKeyClaims, "policy" | "keyId">, idempotencyKey: string): Hex {
+  return keccak256(stringToHex(`${claims.policy}:${claims.keyId}:${idempotencyKey}`));
+}
+
 function lower(value: unknown) {
   return String(value ?? "").toLowerCase();
 }
 
 export function assertPolicyMatchesApiKey(policy: PolicyState, claims: AgentApiKeyClaims) {
+  const version = Number(policy.contract_version ?? 0);
+  if (version < 4) throw new Error("Policy migration required: agent spending is blocked until this treasury is registered on policy V4");
+  if (BigInt(policy.auto_approve_threshold_atto ?? "0") !== 0n) {
+    throw new Error("Policy migration required: fast approval must be disabled before agent spending is allowed");
+  }
   if (lower(policy.authorized_agent) !== claims.agent.toLowerCase()) throw new Error("API key agent is not authorized for this policy");
   if (lower(policy.delegated_account) !== claims.delegatedAccount.toLowerCase()) throw new Error("API key delegated account does not match policy");
   if (lower(policy.token_address) !== claims.token.toLowerCase()) throw new Error("API key token does not match policy");
@@ -178,6 +195,8 @@ export function publicPolicyState(policy: PolicyState) {
     weekly_spent_atto: policy.weekly_spent_atto ?? "0",
     policy_text: policy.policy_text ?? "",
     policy_nonce: policy.policy_nonce ?? "0",
+    whitelist_enabled: policy.whitelist_enabled === true,
+    whitelisted_recipients: policy.whitelisted_recipients ?? [],
     delegation_registered: policy.delegation_registered === true,
     security: policySecurityProfile(policy),
   };
@@ -197,16 +216,16 @@ export async function assertRegistryBinding(claims: AgentApiKeyClaims) {
   return binding;
 }
 
-export async function readPolicyState(policy: Address) {
-  return await genlayerRead<PolicyState>(policy, "get_policy");
+export async function readPolicyState(policy: Address, state: "latest" | "finalized" = "latest") {
+  return await genlayerRead<PolicyState>(policy, "get_policy", [], state);
 }
 
-export async function listPolicyRequests(policy: Address) {
-  return await genlayerRead<string[]>(policy, "list_requests");
+export async function listPolicyRequests(policy: Address, state: "latest" | "finalized" = "latest") {
+  return await genlayerRead<string[]>(policy, "list_requests", [], state);
 }
 
-export async function readPolicyRequest(policy: Address, requestId: string) {
-  return await genlayerRead<RequestState>(policy, "get_request", [requestId]);
+export async function readPolicyRequest(policy: Address, requestId: string, state: "latest" | "finalized" = "latest") {
+  return await genlayerRead<RequestState>(policy, "get_request", [requestId], state);
 }
 
 export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payload: SpendPayload) {
@@ -219,95 +238,96 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
   await assertRegistryBinding(claims);
 
   const amountAtto = amountToUnits(payload.amount, claims.tokenDecimals);
-  const requestId = payload.requestId
-    ?? keccak256(stringToHex(payload.idempotencyKey
-      ? `${claims.policy}:${claims.keyId}:${payload.idempotencyKey}`
-      : `${claims.policy}:${claims.keyId}:${randomUUID()}`));
+  const requestId = deriveRequestId(claims, payload.idempotencyKey);
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
   const justificationHash = keccak256(stringToHex(payload.justification));
+  const evidence = await verifyEvidence(payload.evidence, {
+    chainId: claims.chainId,
+    policy: claims.policy,
+    token: claims.token,
+    recipient: payload.recipient,
+    amountUnits: amountAtto,
+  });
 
-  if (payload.idempotencyKey) {
-    const requestIds = await listPolicyRequests(claims.policy);
-    if (requestIds.some((id) => id.toLowerCase() === requestId.toLowerCase())) {
-      const existing = await readPolicyRequest(claims.policy, requestId);
-      const samePayload =
-        lower(existing.recipient) === payload.recipient.toLowerCase()
-        && existing.amount_atto === amountAtto.toString()
-        && existing.category === payload.category
-        && existing.justification === payload.justification;
-      if (!samePayload) throw new Error("idempotency_key was already used with a different request");
-      let recovered = existing;
-      let execution = null;
-      if (!recovered.finalized) {
-        await genlayerWrite(claims.policy, "mark_request_finalized", [requestId]);
-        recovered = await readPolicyRequest(claims.policy, requestId);
-      }
-      if (
-        recovered.verdict === "approved"
-        && recovered.finalized
-        && !recovered.tx_hash
-        && ["ready", "failed", "approved_pending_execution"].includes(recovered.execution_status ?? "")
-      ) {
-        try {
-          execution = await executeApprovedPolicyRequest(claims.policy, requestId);
-        } catch {
-          recovered = await readPolicyRequest(claims.policy, requestId);
-        }
-      }
-      return {
-        requestId,
-        policy,
-        requestState: execution?.requestState ?? recovered,
-        submit: { hash: null, receipt: null },
-        execution,
-        record: execution?.record ?? null,
-        idempotentReplay: true,
-      };
-    }
+  const requestIds = await listPolicyRequests(claims.policy);
+  if (requestIds.some((id) => id.toLowerCase() === requestId.toLowerCase())) {
+    const existing = await readPolicyRequest(claims.policy, requestId);
+    const samePayload =
+      lower(existing.recipient) === payload.recipient.toLowerCase()
+      && existing.amount_atto === amountAtto.toString()
+      && existing.category === payload.category
+      && existing.justification === payload.justification
+      && lower(existing.evidence_digest) === evidence.digest.toLowerCase();
+    if (!samePayload) throw new Error("idempotency_key was already used with a different request");
+    return {
+      requestId,
+      policy,
+      requestState: existing,
+      submit: { hash: null, receipt: null },
+      idempotentReplay: true,
+    };
   }
 
-  const submit = await genlayerWrite(claims.policy, "submit_request", [
+  const hash = await genlayerSubmitWrite(claims.policy, "queue_request", [
     payload.recipient,
     amountAtto,
     payload.category,
     payload.justification,
     justificationHash,
+    evidence.canonicalJson,
+    evidence.digest,
+    evidence.invoiceKey,
     requestId,
     deadline,
     claims.agent,
-  ], "finalized");
-  await genlayerWrite(claims.policy, "mark_request_finalized", [requestId]);
-  const requestState = await readPolicyRequest(claims.policy, requestId);
-
-  let execution = null;
-  if (requestState.verdict === "approved" && requestState.finalized) {
-    try {
-      execution = await executeApprovedPolicyRequest(claims.policy, requestId);
-    } catch {
-      // The execution helper records a retryable on-chain failure. Return that
-      // authoritative state instead of hiding an approved request behind a 500.
-    }
-  }
+  ]);
+  const now = new Date().toISOString();
+  const requestState: RequestState = {
+    request_id: requestId,
+    recipient: payload.recipient,
+    amount_atto: amountAtto.toString(),
+    category: payload.category,
+    justification: payload.justification,
+    evidence: evidence.items,
+    evidence_digest: evidence.digest,
+    invoice_key: evidence.invoiceKey,
+    verdict: "pending",
+    reasoning: "Submitted to GenLayer and awaiting finalized policy review",
+    tx_hash: "",
+    created_at: now,
+    updated_at: now,
+    execution_status: "submitted",
+    execution_error: "",
+    execution_claimed_at: "",
+    finalized: false,
+  };
   return {
     requestId,
     policy,
-    requestState: await readPolicyRequest(claims.policy, requestId),
-    submit,
-    execution,
-    record: execution?.record ?? null,
+    requestState,
+    submit: { hash, receipt: null },
     idempotentReplay: false,
   };
 }
 
+export async function reviewQueuedPolicyRequest(policyAddress: Address, requestId: Hex) {
+  const request = await readPolicyRequest(policyAddress, requestId, "finalized");
+  if (request.verdict !== "pending" || request.execution_status !== "review_pending") {
+    return request;
+  }
+  await genlayerWrite(policyAddress, "review_request", [requestId], "finalized");
+  return await readPolicyRequest(policyAddress, requestId, "finalized");
+}
+
 export async function executeApprovedPolicyRequest(policyAddress: Address, requestId: Hex) {
-  const policy = await readPolicyState(policyAddress);
+  const policy = await readPolicyState(policyAddress, "finalized");
   if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
     throw new Error("Platform signer does not match the policy execution reporter");
   }
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Approved request has no active ERC-7715 delegation");
   const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
   if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
-  const binding = await genlayerRead<RegistryBinding>(registry as Address, "get_policy", [policyAddress]);
+  const binding = await genlayerRead<RegistryBinding>(registry as Address, "get_policy", [policyAddress], "finalized");
   if (!binding.active) throw new Error("Policy registry binding is inactive");
   if (
     lower(binding.policy) !== policyAddress.toLowerCase()
@@ -319,7 +339,7 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   ) {
     throw new Error("Finalized registry binding does not match the approved policy");
   }
-  const request = await readPolicyRequest(policyAddress, requestId);
+  const request = await readPolicyRequest(policyAddress, requestId, "finalized");
   if (!request.finalized) throw new Error("GenLayer request is not finalized for execution");
   await genlayerWrite(policyAddress, "claim_execution", [requestId]);
   const relay = {
@@ -381,6 +401,9 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
     amount_units: row.amount_atto,
     category: row.category,
     justification: row.justification,
+    evidence: row.evidence ?? [],
+    evidence_digest: row.evidence_digest ?? "",
+    invoice_key: row.invoice_key ?? "",
     verdict: row.verdict,
     decision_mode: decisionMode,
     status,

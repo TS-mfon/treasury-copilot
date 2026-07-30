@@ -2,6 +2,17 @@
 
 This is the normative HTTP contract for agents. Agents use JSON over HTTPS and a bearer API key. They do not install `genlayer-js`, MetaMask, viem, or an EVM wallet library.
 
+> **TESTNET:** automatic execution currently uses Base Sepolia (`84532`) and
+> test USDC at `0x036CbD53842c5426634e7929541eC2318f3dCF7e`. These are not
+> real payments or production funds.
+
+Machine-readable and generated client resources:
+
+- OpenAPI 3.1: `/openapi.json`
+- Postman: `docs/treasury-copilot.postman_collection.json`
+- TypeScript: `docs/examples/agent-client.ts`
+- Python: `docs/examples/agent_client.py`
+
 ## 0. Five-minute quickstart
 
 You need two values from the human owner:
@@ -40,9 +51,9 @@ curl -sS "$TREASURY_API_BASE/spend" \
   }"
 ```
 
-Save the returned `request_id`. After an ambiguous timeout, retry with the same
-idempotency key or poll `GET /requests/:request_id`. Never create a new
-idempotency key for the same intended payment.
+Save the returned `request_id`. If the client times out before receiving it,
+call `GET /requests?idempotency_key=...` or retry the identical POST with the
+same key. Never create a new idempotency key for the same intended payment.
 
 ## 1. Connection
 
@@ -161,7 +172,8 @@ POST /api/v1/spend
   "amount": "25.000000",
   "category": "software",
   "justification": "Production API renewal invoice INV-4471",
-  "idempotency_key": "invoice-4471-2026-07"
+  "idempotency_key": "invoice-4471-2026-07",
+  "evidence": []
 }
 ```
 
@@ -170,12 +182,12 @@ Field rules:
 | Field | Required | Rule |
 | --- | --- | --- |
 | `agent_address` | yes | Registered EVM address |
-| `recipient` | yes | EVM address |
+| `recipient` | yes | EVM address obtained from `GET /policy`, an owner-approved merchant record, or verified invoice evidence |
 | `amount` | yes | Positive decimal string, USDC precision |
 | `category` | yes | 2-64 characters |
 | `justification` | yes | 4-1200 characters |
-| `idempotency_key` | no | 8-128 safe characters |
-| `request_id` | no | 32-byte hex ID for advanced integrations |
+| `idempotency_key` | yes | 8-128 characters: letters, numbers, `.`, `_`, `:`, `-` |
+| `evidence` | no | Up to 3 `invoice_url` or `signed_invoice` objects |
 
 `amount: "25.000000"` becomes `amount_units: "25000000"`. `25`, `25.0`, and `25.000000` represent the same amount. `25.0000001`, `1e2`, `-1`, `0`, and JSON numeric values are rejected.
 
@@ -184,8 +196,10 @@ Field rules:
 ```json
 {
   "request_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "verdict": "approved",
-  "reasoning": "The request matches the exact recipient and policy",
+  "verdict": "pending",
+  "reasoning": "Submitted to GenLayer and awaiting finalized policy review",
+  "status": "submitted",
+  "poll_url": "/api/v1/requests/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "request": {
     "request_id": "0x...",
     "recipient": "0x...",
@@ -193,13 +207,13 @@ Field rules:
     "amount_units": "25000000",
     "category": "software",
     "justification": "Production API renewal invoice INV-4471",
-    "verdict": "approved",
+    "verdict": "pending",
     "decision_mode": "prompt_comparative",
-    "status": "executed",
-    "execution_status": "executed",
+    "status": "submitted",
+    "execution_status": "submitted",
     "execution_error": "",
-    "tx_hash": "0x...",
-    "explorer_url": "https://sepolia.basescan.org/tx/0x...",
+    "tx_hash": "",
+    "explorer_url": null,
     "created_at": "2026-07-21T12:00:00.000Z",
     "updated_at": "2026-07-21T12:01:00.000Z"
   },
@@ -209,25 +223,17 @@ Field rules:
     "explorer_url": "https://sepolia.basescan.org"
   },
   "idempotent_replay": false,
-  "execution": {
-    "mode": "erc7710",
-    "task_id": "relayer-task-id",
-    "fee_amount": "0.01",
-    "fee_amount_units": "10000"
-  },
   "genlayer": {
-    "request_tx_hash": "0x...",
-    "record_execution_tx_hash": "0x..."
+    "request_tx_hash": "0x..."
   }
 }
 ```
 
-The API waits for GenLayer finality before returning a verdict. An approved request may still have `execution_status: "failed"` when 1Shot is temporarily unavailable. That request remains retryable and visible in history.
-
-The HTTP response can still be `200` when policy evaluation succeeded but
-payout execution failed. Inspect `request.execution_status` and
-`request.execution_error`. Do not create a replacement request; the retry worker
-uses the same on-chain request ID.
+The normal response is `202 Accepted` with `Location` and `Retry-After: 10`.
+The API returns after submitting the deterministic queue transaction; it does
+not hold the HTTP connection open for comparative review or payment execution.
+The authenticated worker reviews finalized queued requests and executes approved
+requests. Poll the returned URL.
 
 `idempotent_replay: true` means the API returned an existing on-chain request.
 No new GenLayer request or payout was submitted. The original request ID and
@@ -239,10 +245,10 @@ Base transaction hash remain in `request`.
 | --- | --- |
 | `deterministic` | A cap, budget, amount, or whitelist rule decided the request |
 | `prompt_comparative` | GenLayer prompt-comparative consensus evaluated the policy |
-| `legacy_fast_approval` | A V2 policy skipped semantic review because the amount was below its limit |
-
-Treat `legacy_fast_approval` as a migration warning. Policy V3 requires a zero
-fast-approval limit and sends every request through prompt-comparative review.
+V4 has no fast-approval decision mode. Every valid request uses
+`prompt_comparative`. Hard-invalid requests such as zero amounts, exceeded caps,
+or non-whitelisted recipients are denied deterministically. V2 and V3 policies
+are blocked from new API spending until the owner migrates them to V4.
 
 ## 5. Idempotency
 
@@ -250,11 +256,23 @@ Use an idempotency key for invoices, subscriptions, and any operation that may b
 
 The server derives a request ID from policy, key ID, and idempotency key. On repeat:
 
-- same key and identical recipient/amount/category/justification: return the existing on-chain request;
+- same key and identical recipient/amount/category/justification/evidence: return the existing on-chain request;
 - same key with any changed field: return `idempotency_conflict`;
 - no key: generate a random request ID.
 
 Idempotency is not a replacement for on-chain replay protection. The policy always rejects a duplicate request ID.
+
+If a client times out before receiving the POST response:
+
+```http
+GET /api/v1/requests?idempotency_key=invoice-4471-2026-07
+```
+
+The lookup derives the same request ID from the authenticated key. It returns
+the request when visible, or `202 not_found_or_pending` while GenLayer has not
+made the queued state readable. Retrying the original POST with the identical
+body and idempotency key is safe. Never create a replacement key for the same
+payment.
 
 ## 6. Balance
 
@@ -289,8 +307,9 @@ Example:
   "per_tx_cap": "25",
   "per_tx_cap_units": "25000000",
   "security": {
-    "contract_version": "3",
+    "contract_version": "4",
     "semantic_review_required_for_all_requests": true,
+    "asynchronous_review_supported": true,
     "legacy_fast_approval_active": false,
     "warnings": []
   }
@@ -307,23 +326,30 @@ excludes the 1Shot fee.
 `category` and `justification` are untrusted agent claims. They do not prove
 that a recipient belongs to a merchant or that an invoice is genuine.
 
-For the current API:
+Use `GET /api/v1/policy` for recipient discovery. If
+`whitelist_enabled=true`, choose only from `whitelisted_recipients`. If the list
+is empty, the agent must obtain an owner-approved recipient from the merchant or
+invoice; there is no default recipient.
 
-- include the exact permitted recipient address in the policy text;
-- enable the recipient whitelist;
-- include a specific invoice or billing reference in the justification;
-- set every legacy V2 fast-approval limit to `0`;
-- do not rely on a merchant name alone.
+V4 supports two evidence types:
 
-Evidence-backed invoice, domain, and signature verification is planned for API
-V2. Until that exists, a rule such as "pay Vercel only" without an exact
-recipient binding is not sufficient for production funds.
+| Type | Verification |
+| --- | --- |
+| `invoice_url` | HTTPS only; DNS and every redirect are checked against private/local/reserved destinations; response is limited to 256 KiB; fetched SHA-256, merchant domain, recipient, amount, and timestamps must match |
+| `signed_invoice` | EIP-712 signature is bound to policy, chain, token, invoice ID, merchant ID, recipient, exact base-unit amount, timestamps, and content hash |
+
+All evidence items in one request must describe the same invoice. Evidence older
+than 90 days, expired evidence, recipient or amount substitution, unsupported
+content types, invalid signatures, and duplicate invoice keys are rejected.
+Evidence proves only the verified domain or signer facts; GenLayer still applies
+the owner's policy to decide whether that domain or signer is trusted.
 
 ## 8. History
 
 ```http
 GET /api/v1/history?limit=50
 GET /api/v1/requests/:request_id
+GET /api/v1/requests?idempotency_key=...
 GET /api/v1/policy
 ```
 
@@ -333,18 +359,24 @@ History is pulled from GenLayer state. The service does not maintain a separate 
 by exactly 64 hexadecimal characters.
 
 `GET /policy` returns safe policy metadata, caps, budget usage, policy text, and
-whether a delegation is registered. It deliberately omits the serialized
+whether a delegation is registered, plus `whitelist_enabled` and
+`whitelisted_recipients` for recipient discovery. It deliberately omits the serialized
 delegation, permission context, signatures, and platform private-key material.
 
 Status meanings:
 
 | Status | Meaning |
 | --- | --- |
+| `submitted` | Queue transaction was submitted and the API returned `202` |
+| `review_pending` | Finalized queue state is waiting for GenLayer review |
+| `pending` | Verdict has not been finalized |
 | `denied` | Policy or cap rejected the request |
 | `approved` | Finalized approval is ready for execution |
+| `ready` | Execution can be claimed by the platform worker |
 | `executing` | Execution lease is held by the platform worker |
 | `failed` | Relay failed; retry is allowed after lease release |
 | `executed` | EVM tx hash recorded on-chain |
+| `not_applicable` | Execution is not applicable, normally because the request was denied |
 
 ## 9. Errors
 
@@ -362,6 +394,21 @@ Every error has:
 
 Clients should branch on `error`, not on human message text.
 
+HTTP behavior:
+
+| HTTP | Meaning | Retry |
+| ---: | --- | --- |
+| `200` | Read succeeded or an existing finalized idempotent request was returned | no |
+| `202` | Spend submitted or idempotency lookup is not visible yet | poll/retry same key |
+| `400` | Malformed JSON or unsupported request shape | fix request |
+| `401` | Missing, invalid, expired, rotated, or revoked key | obtain valid key |
+| `403` | Agent, owner, policy, chain, token, or funding binding mismatch | owner/operator action |
+| `409` | Idempotency conflict or policy migration required | do not retry unchanged |
+| `422` | Invalid amount, address, evidence, category, or unsupported capability | fix fields |
+| `429` | Edge rate limit | honor `Retry-After` |
+| `502` | GenLayer, EVM RPC, or 1Shot upstream failure | retry same key with backoff |
+| `503` | Consensus or platform configuration unavailable | retry same key with backoff |
+
 | Error | HTTP | Retry |
 | --- | ---: | --- |
 | `invalid_api_key` | 401 | no |
@@ -370,7 +417,9 @@ Clients should branch on `error`, not on human message text.
 | `policy_inactive` | 403 | owner action |
 | `request_not_found` | 404 | check ID |
 | `idempotency_conflict` | 409 | no |
+| `policy_migration_required` | 409 | owner must re-register on V4 |
 | `invalid_amount` | 422 | no |
+| `invalid_evidence` | 422 | fix evidence |
 | `invalid_request` | 422 | fix payload |
 | `unsupported_chain` | 422 | no |
 | `unsupported_wallet_capability` | 422 | owner action |

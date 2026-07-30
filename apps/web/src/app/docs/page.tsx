@@ -10,7 +10,19 @@ const spendExample = `curl -X POST https://treasury-copilot-genjury.vercel.app/a
     "amount": "25.00",
     "category": "api_subscription",
     "justification": "Monthly API renewal, invoice #4471",
-    "idempotency_key": "billing-4471-2026-07"
+    "idempotency_key": "billing-4471-2026-07",
+    "evidence": [{
+      "type": "signed_invoice",
+      "invoice_id": "4471",
+      "merchant_id": "vercel",
+      "expected_recipient": "0xabc...",
+      "expected_amount": "25000000",
+      "issued_at": 1784800000,
+      "expires_at": 1785400000,
+      "content_hash": "0x...",
+      "signer": "0xMerchantSigner",
+      "signature": "0x..."
+    }]
   }'`;
 
 const balanceExample = `curl -X GET https://treasury-copilot-genjury.vercel.app/api/v1/balance \\
@@ -22,11 +34,17 @@ const historyExample = `curl -X GET "https://treasury-copilot-genjury.vercel.app
 const requestExample = `curl -X GET https://treasury-copilot-genjury.vercel.app/api/v1/requests/0xREQUEST_ID \\
   -H "Authorization: Bearer ***"`;
 
+const recoveryExample = `curl -X GET "https://treasury-copilot-genjury.vercel.app/api/v1/requests?idempotency_key=billing-4471-2026-07" \\
+  -H "Authorization: Bearer ***"`;
+
 export default function DocsPage() {
   return (
     <Shell>
       <article className="grid gap-6">
         <section className="panel rounded-lg p-6">
+          <div className="mb-5 rounded-md border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
+            TESTNET: automatic execution currently uses Base Sepolia (chain 84532) and test USDC. Do not treat testnet balances or transactions as real payments.
+          </div>
           <div className="flex items-start justify-between">
             <div>
               <div className="badge text-purple">DEVELOPER DOCS</div>
@@ -36,6 +54,9 @@ export default function DocsPage() {
               </p>
               <p className="mt-2 max-w-3xl text-neutral-400">
                 Base URL: <span className="font-mono text-xs text-neutral-300">https://treasury-copilot-genjury.vercel.app</span>. All agent paths are under <span className="font-mono text-xs text-neutral-300">/api/v1</span>. Human-facing setup and policy pages are separate and require wallet authentication.
+              </p>
+              <p className="mt-2 text-sm text-neutral-400">
+                Machine-readable contract: <a className="font-mono text-purple hover:text-ink" href="/openapi.json">OpenAPI 3.1 JSON</a>
               </p>
             </div>
             <BookOpen className="text-purple" />
@@ -57,7 +78,7 @@ export default function DocsPage() {
           <h2 className="text-xl font-semibold">Quickstart</h2>
           <ol className="mt-4 grid gap-3 text-sm text-neutral-300">
             <li><span className="font-mono text-purple">1.</span> Store the one-time API key in a secret manager or environment variable.</li>
-            <li><span className="font-mono text-purple">2.</span> Call <span className="font-mono">GET /balance</span> and use the returned agent address exactly.</li>
+            <li><span className="font-mono text-purple">2.</span> Call <span className="font-mono">GET /policy</span>. Choose a recipient from <span className="font-mono">whitelisted_recipients</span>, or obtain an invoice recipient that the owner policy explicitly permits.</li>
             <li><span className="font-mono text-purple">3.</span> Submit a decimal string amount with a stable idempotency key.</li>
             <li><span className="font-mono text-purple">4.</span> Save the request ID and poll the request endpoint after timeouts.</li>
           </ol>
@@ -69,7 +90,7 @@ export default function DocsPage() {
         <section className="panel rounded-lg p-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold"><Code2 size={18} /> POST /api/v1/spend</h2>
           <p className="mt-2 text-neutral-400">
-            Submits one spend request and waits for GenLayer finality. Finalized approvals immediately attempt 1Shot execution; the authenticated relay worker retries requests whose execution failed. Use an idempotency_key to avoid duplicate processing.
+            Validates the request, verifies evidence, submits it to GenLayer, and returns <span className="font-mono">202 Accepted</span> immediately. The worker reviews finalized queued requests with prompt-comparative consensus and executes approved requests through 1Shot.
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">{spendExample}</pre>
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Request body</h3>
@@ -79,22 +100,25 @@ export default function DocsPage() {
   "amount": "25.00",
   "category": "api_subscription",
   "justification": "Monthly API renewal invoice #4471",
-  "idempotency_key": "billing-4471-2026-07"
+  "idempotency_key": "billing-4471-2026-07",
+  "evidence": []
 }`}</pre>
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Response</h3>
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{`{
   "request_id": "0x...",
-  "verdict": "approved",
-  "reasoning": "The request matches the exact recipient and policy",
+  "verdict": "pending",
+  "reasoning": "Submitted to GenLayer and awaiting finalized policy review",
+  "status": "submitted",
+  "poll_url": "/api/v1/requests/0x...",
   "request": {
-    "status": "executed",
+    "status": "submitted",
     "recipient": "0x...",
     "amount": "25",
     "amount_units": "25000000",
     "decision_mode": "prompt_comparative",
-    "execution_status": "executed",
-    "tx_hash": "0x...",
-    "explorer_url": "https://sepolia.basescan.org/tx/0x...",
+    "execution_status": "submitted",
+    "tx_hash": "",
+    "explorer_url": null,
     "created_at": "2026-07-21T12:10:00.000Z",
     "updated_at": "2026-07-21T12:11:00.000Z"
   },
@@ -104,16 +128,13 @@ export default function DocsPage() {
     "explorer_url": "https://sepolia.basescan.org"
   },
   "idempotent_replay": false,
-  "execution": {
-    "mode": "erc7710",
-    "fee_amount": "0.01",
-    "fee_amount_units": "10000"
-  },
   "genlayer": {
-    "request_tx_hash": "0x...",
-    "record_execution_tx_hash": "0x..."
+    "request_tx_hash": "0x..."
   }
 }`}</pre>
+          <p className="mt-4 text-sm text-neutral-400">
+            The response includes <span className="font-mono">Location</span> and <span className="font-mono">Retry-After: 10</span>. Poll until the request reaches <span className="font-mono">denied</span>, <span className="font-mono">executed</span>, or a retryable <span className="font-mono">failed</span> state.
+          </p>
         </section>
 
         <section className="grid gap-6 lg:grid-cols-2">
@@ -132,10 +153,10 @@ export default function DocsPage() {
         <section className="panel rounded-lg p-6">
           <h2 className="text-xl font-semibold">Merchant identity and policy safety</h2>
           <p className="mt-2 text-neutral-400">
-            Category and justification are untrusted agent claims. A merchant name does not prove recipient ownership or invoice validity. Put the exact approved recipient address in the policy, enable the recipient whitelist, and set every legacy V2 fast approval limit to zero.
+            Category and justification are untrusted claims. Policy V4 accepts up to three verified evidence items: an HTTPS invoice whose fetched bytes match a SHA-256 digest, or an EIP-712 signed invoice bound to the exact policy, chain, token, recipient, amount, timestamps, and content hash.
           </p>
           <p className="mt-3 text-neutral-400">
-            Policy V3 uses GenLayer prompt-comparative review for every amount. Evidence-backed invoice and merchant verification is required before safe fast approval can return.
+            Fast approval has been removed. Every valid V4 request receives GenLayer prompt-comparative review. V2 and V3 policies are blocked from new API spending until the owner re-registers the delegation and migrates to V4.
           </p>
         </section>
 
@@ -145,6 +166,8 @@ export default function DocsPage() {
             Returns one request record by ID, scoped to the authenticated API key. Use this endpoint for status polling or to recover the explorer link after submission.
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">{requestExample}</pre>
+          <h3 className="mt-6 text-sm font-semibold text-neutral-300">Recover by idempotency key</h3>
+          <pre className="terminal mt-2 overflow-auto p-4 text-xs">{recoveryExample}</pre>
           <p className="mt-4 text-sm text-neutral-400">
             GET /api/v1/policy returns safe caps and policy metadata. Raw delegation payloads, permission contexts, signatures, and signer secrets are never returned to agents.
           </p>
@@ -152,13 +175,17 @@ export default function DocsPage() {
 
         <section className="panel rounded-lg p-6">
           <h2 className="text-xl font-semibold">Lifecycle and polling</h2>
-          <div className="mt-4 grid gap-px overflow-hidden border border-outline bg-outline sm:grid-cols-5">
+          <div className="mt-4 grid gap-px overflow-hidden border border-outline bg-outline sm:grid-cols-4">
             {[
-              ["submitted", "Platform signs and sends the policy request."],
-              ["finalized", "The GenLayer decision is no longer appealable."],
+              ["submitted", "Platform signer queued the request; the API returned 202."],
+              ["review_pending", "The queue transaction is finalized and awaits comparative review."],
+              ["pending", "The GenLayer review transaction is processing."],
+              ["denied", "A deterministic guard or comparative review rejected the request."],
+              ["ready", "The approved finalized request is ready for 1Shot."],
               ["executing", "The platform holds the on-chain execution lease."],
               ["failed", "The lease is released and the request can retry."],
               ["executed", "The confirmed EVM transaction hash is recorded."],
+              ["not_applicable", "Execution does not apply, normally because the request was denied."],
             ].map(([status, detail]) => (
               <div key={status} className="bg-paper p-4">
                 <p className="font-mono text-xs text-purple">{status}</p>
@@ -167,7 +194,7 @@ export default function DocsPage() {
             ))}
           </div>
           <p className="mt-4 text-sm text-neutral-400">
-            If the spend request times out at the HTTP layer, poll GET /api/v1/requests/:id with the same API key. Do not submit a different idempotency key for the same intended payment.
+            If the client times out before receiving the POST response, call <span className="font-mono">GET /api/v1/requests?idempotency_key=...</span> or retry the original POST with the same body and idempotency key. Never create a replacement key for the same payment.
           </p>
           <p className="mt-3 text-sm text-neutral-400">
             An identical replay returns <span className="font-mono">idempotent_replay: true</span>, the same request ID, and the same Base transaction hash without another payment.
@@ -220,7 +247,7 @@ export default function DocsPage() {
             The agent never receives custody and does not need a wallet library or gas. The owner grants bounded token spending to the platform signer. GenLayer verifies the registered agent and policy. Only approved requests are executed through 1Shot, then the EVM transaction hash is written back to GenLayer. Relayer failures leave on-chain records so requests can be retried safely with no duplicate payout risk.
           </p>
           <p className="mt-3 text-neutral-400">
-            Current execution support is Base Sepolia USDC. X Layer and other chains remain disabled until the live 1Shot capability response confirms the selected token and transaction mode.
+            Current execution support is Base Sepolia test USDC. Base Mainnet and other chains remain disabled until their isolated production configuration and live 1Shot capability checks pass.
           </p>
         </section>
       </article>

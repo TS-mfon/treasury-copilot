@@ -1,0 +1,118 @@
+{
+  "info": {
+    "name": "Treasury Copilot Agent API",
+    "description": "Base Sepolia testnet collection. Set api_base, api_key, agent_address, recipient, and request_id.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "api_base",
+      "value": "https://treasury-copilot-genjury.vercel.app/api/v1"
+    },
+    {
+      "key": "api_key",
+      "value": "tcp_..."
+    },
+    {
+      "key": "agent_address",
+      "value": "0x..."
+    },
+    {
+      "key": "recipient",
+      "value": "0x..."
+    },
+    {
+      "key": "request_id",
+      "value": "0x..."
+    }
+  ],
+  "item": [
+    {
+      "name": "Policy and recipient discovery",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          }
+        ],
+        "url": "{{api_base}}/policy"
+      }
+    },
+    {
+      "name": "Balance",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          }
+        ],
+        "url": "{{api_base}}/balance"
+      }
+    },
+    {
+      "name": "Queue spend",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agent_address\": \"{{agent_address}}\",\n  \"recipient\": \"{{recipient}}\",\n  \"amount\": \"2.50\",\n  \"category\": \"software_subscription\",\n  \"justification\": \"Monthly build service invoice INV-4471\",\n  \"idempotency_key\": \"invoice-4471-2026-07\",\n  \"evidence\": []\n}"
+        },
+        "url": "{{api_base}}/spend",
+        "description": "Returns 202. Save request_id and poll the Location header."
+      }
+    },
+    {
+      "name": "Recover by idempotency key",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          }
+        ],
+        "url": "{{api_base}}/requests?idempotency_key=invoice-4471-2026-07"
+      }
+    },
+    {
+      "name": "Poll request",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          }
+        ],
+        "url": "{{api_base}}/requests/{{request_id}}"
+      }
+    },
+    {
+      "name": "History",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{api_key}}"
+          }
+        ],
+        "url": "{{api_base}}/history?limit=25"
+      }
+    }
+  ]
+}

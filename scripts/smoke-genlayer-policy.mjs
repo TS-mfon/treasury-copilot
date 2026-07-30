@@ -85,6 +85,8 @@ async function signedRequest({ amountAtto, category, justification, label }) {
     stringToHex(`${policy}:${agentAddress}:${recipient}:${amountAtto}:${category}:${label}:${Date.now()}`),
   );
   const justificationHash = keccak256(stringToHex(justification));
+  const evidenceJson = "[]";
+  const evidenceDigest = keccak256(stringToHex(evidenceJson));
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 60);
   return {
     requestId,
@@ -94,6 +96,9 @@ async function signedRequest({ amountAtto, category, justification, label }) {
       category,
       justification,
       justificationHash,
+      evidenceJson,
+      evidenceDigest,
+      "",
       requestId,
       deadline.toString(),
       agentAddress,
@@ -101,37 +106,32 @@ async function signedRequest({ amountAtto, category, justification, label }) {
   };
 }
 
-async function submitAndFinalize(example) {
+async function queueReviewAndFinalize(example) {
   const request = await signedRequest(example);
-  const submitOutput = runGenlayer(["write", policy, "submit_request", "--args", ...request.args]);
+  const submitOutput = runGenlayer(["write", policy, "queue_request", "--args", ...request.args]);
   const submitHash = transactionHash(submitOutput);
-  waitForFinalized(`${example.label} submission`, submitHash);
-  // Comparative LLM receipts can include failed or idle validator attempts
-  // even when consensus commits the leader state.
-  readRequest(request.requestId, false);
-
-  const markerOutput = runGenlayer([
-    "write",
-    policy,
-    "mark_request_finalized",
-    "--args",
-    request.requestId,
-  ]);
-  const markerHash = transactionHash(markerOutput);
-  waitForFinalized(`${example.label} finality marker`, markerHash);
+  waitForFinalized(`${example.label} queue`, submitHash);
+  let state = readRequest(request.requestId, false);
+  let reviewHash = null;
+  if (state.verdict === "pending") {
+    const reviewOutput = runGenlayer(["write", policy, "review_request", "--args", request.requestId]);
+    reviewHash = transactionHash(reviewOutput);
+    waitForFinalized(`${example.label} review`, reviewHash);
+    state = readRequest(request.requestId);
+  }
 
   return {
     label: example.label,
     request_id: request.requestId,
-    submit_tx_hash: submitHash,
-    finality_tx_hash: markerHash,
-    state: readRequest(request.requestId),
+    queue_tx_hash: submitHash,
+    review_tx_hash: reviewHash,
+    state,
   };
 }
 
 const examples = [
   {
-    label: "auto-approved",
+    label: "small-policy-reviewed",
     amountAtto: "4000000",
     category: "software",
     justification: "Monthly production API bill for Treasury Copilot infrastructure.",
@@ -152,11 +152,11 @@ const examples = [
 
 const results = [];
 for (const example of examples) {
-  results.push(await submitAndFinalize(example));
+  results.push(await queueReviewAndFinalize(example));
 }
 
 if (results[0].state.verdict !== "approved") {
-  throw new Error("The 4 USDC example was not auto-approved");
+  throw new Error("The 4 USDC example was not approved by policy review");
 }
 if (results[1].state.verdict !== "denied") {
   throw new Error("The 26 USDC example was not denied by the cap");

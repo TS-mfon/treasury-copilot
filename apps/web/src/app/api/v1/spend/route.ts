@@ -1,5 +1,4 @@
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { formatUnits } from "viem";
 import { chainToApi, parseSpendPayload, requestToApi, submitSpendThroughPolicy } from "@/lib/apiServer";
 import { apiErrorResponse } from "@/lib/errors";
 
@@ -11,24 +10,26 @@ export async function POST(request: Request) {
     const claims = verifyAgentApiKey(bearerToken(request));
     const payload = parseSpendPayload(await request.json());
     const result = await submitSpendThroughPolicy(claims, payload);
+    const requestUrl = `/api/v1/requests/${result.requestId}`;
+    const status = result.idempotentReplay && result.requestState.finalized ? 200 : 202;
     return Response.json({
       request_id: result.requestId,
       verdict: result.requestState.verdict,
       reasoning: result.requestState.reasoning,
+      status: result.requestState.execution_status,
       request: requestToApi(result.requestState, claims.tokenDecimals, claims.chainId),
       chain: chainToApi(claims.chainId),
       idempotent_replay: result.idempotentReplay,
-      execution: result.execution ? {
-        mode: result.execution.execution.mode,
-        task_id: result.execution.execution.task_id ?? null,
-        fee_amount_units: result.execution.execution.fee_amount_units ?? null,
-        fee_amount: result.execution.execution.fee_amount_units
-          ? formatUnits(BigInt(result.execution.execution.fee_amount_units), claims.tokenDecimals)
-          : null,
-      } : null,
+      poll_url: requestUrl,
       genlayer: {
         request_tx_hash: result.submit.hash,
-        record_execution_tx_hash: result.record?.hash ?? null,
+      },
+    }, {
+      status,
+      headers: {
+        "cache-control": "no-store",
+        location: requestUrl,
+        ...(status === 202 ? { "retry-after": "10" } : {}),
       },
     });
   } catch (error) {

@@ -14,14 +14,17 @@ agent a wallet private key or unrestricted access to human funds.
 A human owner connects MetaMask, grants a limited USDC spending permission,
 and creates an isolated treasury policy for one agent. The agent then requests
 payments through a normal HTTPS API. Treasury Copilot submits the request to
-GenLayer, waits for a finalized policy decision, and uses 1Shot to execute only
-approved payments.
+GenLayer, returns an immediate request ID, and processes the finalized
+prompt-comparative decision asynchronously. 1Shot executes only approved
+payments.
 
 The result is similar to giving an employee a company card with strict limits
 instead of giving them the company's bank credentials.
 
 - Live application: [treasury-copilot-genjury.vercel.app](https://treasury-copilot-genjury.vercel.app)
 - Agent documentation: [docs/api.md](docs/api.md)
+- OpenAPI 3.1: [apps/web/public/openapi.json](apps/web/public/openapi.json)
+- Postman collection: [docs/treasury-copilot.postman_collection.json](docs/treasury-copilot.postman_collection.json)
 - Deployment guide: [docs/deployment.md](docs/deployment.md)
 - In-app documentation: [treasury-copilot-genjury.vercel.app/docs](https://treasury-copilot-genjury.vercel.app/docs)
 
@@ -88,6 +91,10 @@ The production release currently supports:
   sensitive owner actions.
 - On-chain request verdicts, execution status, failures, and EVM transaction
   hashes.
+- Policy V4 asynchronous submission with prompt-comparative review for every
+  valid request.
+- HTTPS invoice digest and EIP-712 signed-invoice evidence verification.
+- Idempotency-key recovery when a client times out before receiving a response.
 
 Base Mainnet is represented in the network configuration and setup UI, but
 automatic delegation remains disabled until the configured 1Shot relayer
@@ -156,7 +163,6 @@ The owner controls:
 - the execution network and token;
 - the weekly delegated amount;
 - the per-request cap;
-- the legacy fast-approval limit, which should remain zero until structured evidence rules exist;
 - the recipient whitelist;
 - the policy text;
 - API-key rotation and revocation.
@@ -260,8 +266,9 @@ The Next.js API gives agents a small, conventional HTTPS interface:
 | `POST /api/v1/spend` | Submit a payment request |
 | `GET /api/v1/balance` | Read token balance, policy limits, and weekly usage |
 | `GET /api/v1/history` | Read on-chain request history |
+| `GET /api/v1/requests?idempotency_key=...` | Recover a request after an ambiguous timeout |
 | `GET /api/v1/requests/:id` | Poll one request |
-| `GET /api/v1/policy` | Read safe policy metadata |
+| `GET /api/v1/policy` | Read safe policy metadata and approved recipients |
 
 Agents do not need MetaMask, `genlayer-js`, viem, an EVM wallet library, a gas
 balance, or signing code. They send JSON and read JSON responses.
@@ -273,11 +280,11 @@ The API:
 3. Confirms every key claim matches the active registry binding.
 4. Confirms the policy's execution reporter is the configured platform signer.
 5. Converts token amounts using exact integer units.
-6. Derives or validates the request ID.
-7. Submits the request to GenLayer.
-8. Waits for finality.
-9. Executes approved requests through 1Shot.
-10. Records success or failure on GenLayer.
+6. Verifies HTTPS or EIP-712 invoice evidence when supplied.
+7. Derives the request ID from the API-key identity and required idempotency key.
+8. Submits the request to GenLayer and returns `202 Accepted`.
+9. Reviews finalized queued requests through prompt-comparative consensus.
+10. Executes approved requests through 1Shot and records the result.
 
 The complete API contract, schemas, errors, retry rules, and examples are in
 [docs/api.md](docs/api.md).
@@ -290,7 +297,7 @@ state-changing GenLayer transactions for the application, including:
 - registry writes;
 - policy deployment and registration;
 - agent payment requests;
-- request finalization markers;
+- queued request reviews;
 - execution claims;
 - execution success or failure records;
 - policy updates;
@@ -343,9 +350,9 @@ It stores:
 - EVM chain ID;
 - per-request cap;
 - weekly cap;
-- legacy fast-approval limit;
 - policy text;
 - optional recipient whitelist;
+- normalized evidence, evidence digest, and duplicate invoice key;
 - weekly reservation accounting;
 - request verdict and reasoning;
 - request finality;
@@ -359,8 +366,8 @@ Before accepting a request, the policy checks:
 2. The request is attributed to the registered agent.
 3. The registry binding is active and unchanged.
 4. The request deadline is valid.
-5. The recipient, amount, category, justification, and request ID are valid.
-6. The request does not violate replay, per-request, weekly, or whitelist rules.
+5. The recipient, amount, category, justification, evidence digest, and request ID are valid.
+6. The request does not violate replay, duplicate-invoice, per-request, weekly, or whitelist rules.
 
 ### GenLayer
 
@@ -402,10 +409,9 @@ In Treasury Copilot:
 
 - hard security rules such as identity, caps, weekly budget, whitelist, and
   replay protection are checked deterministically;
-- policy V3 sends every request through prompt-comparative review after hard
+- policy V4 sends every valid request through prompt-comparative review after hard
   checks pass;
-- legacy V2 policies with a nonzero fast-approval limit are flagged because
-  small requests can bypass semantic review;
+- legacy V2 and V3 policies are blocked from new API spending until migration;
 - the application waits for GenLayer finality before payment execution.
 
 In simple terms, GenLayer acts as the independent jury that determines whether
@@ -416,23 +422,22 @@ Official references:
 - [Equivalence Principle](https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle)
 - [Optimistic Democracy and the Equivalence Principle](https://docs.genlayer.com/understand-genlayer-protocol/core-concepts/optimistic-democracy/equivalence-principle)
 
-### Fast Approval Safety
+### No Fast-Approval Bypass
 
-The legacy fast-approval limit is not another delegation and does not increase
-the agent's spending authority. It did, however, allow V2 requests below the
-limit to bypass semantic policy review.
+Fast approval has been removed from the active policy path. V4 does not permit
+an amount threshold to bypass semantic policy review.
 
 Example policy:
 
 - Weekly delegated amount: `100 USDC`
 - Per-request cap: `25 USDC`
-- Fast-approval limit: `0 USDC`
+- Semantic review: `required`
 
-Policy V3 sends both a `3 USDC` request and a `10 USDC` request through
+Policy V4 sends both a `3 USDC` request and a `10 USDC` request through
 prompt-comparative policy evaluation after deterministic checks. A `26 USDC`
 request is denied before model review because it exceeds the per-request cap.
-Fast approval returns only after structured merchant, recipient, category, and
-evidence rules can establish compliance without trusting agent text.
+Splitting a purchase into smaller requests no longer avoids semantic review,
+and the weekly cap still limits aggregate spending.
 
 ### 1Shot Relayer
 
@@ -532,8 +537,7 @@ rail. They are not used by the current production ERC-7715 execution path.
 5. Enter the agent's EVM address and weekly delegated amount.
 6. Grant the periodic USDC execution permission in MetaMask.
 7. Keep a small native ETH balance available for wallet account setup.
-8. Configure the per-request cap, zero fast-approval limit, policy text, and
-   optional recipient whitelist.
+8. Configure the per-request cap, policy text, and optional recipient whitelist.
 9. Sign the fresh owner setup authorization.
 10. The platform deploys or resumes the matching GenLayer policy.
 11. The platform registers the exact owner-agent-policy-funding binding.
@@ -552,11 +556,12 @@ the server verifies the stored values.
 3. The API reloads the current registry and policy from GenLayer.
 4. The API confirms that key, owner, agent, policy, chain, token, and delegated
    account all match.
-5. The server submits the request using the platform signer.
-6. The policy applies deterministic security checks.
-7. GenLayer evaluates the request and reaches finality.
+5. The server verifies evidence, queues the request using the platform signer,
+   and returns `202 Accepted`.
+6. After the queue transaction finalizes, the worker requests GenLayer review.
+7. GenLayer applies deterministic guards and prompt-comparative policy review.
 8. A denied request is recorded and never sent to 1Shot.
-9. An approved request receives an execution lease.
+9. An approved finalized request receives an execution lease.
 10. 1Shot executes the constrained USDC transfer on Base Sepolia.
 11. The EVM transaction hash is recorded in GenLayer.
 12. The agent and owner can read the complete lifecycle through the API or
@@ -910,6 +915,7 @@ The current production deployment uses:
 | --- | --- |
 | Application | `https://treasury-copilot-genjury.vercel.app` |
 | GenLayer registry | `0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9` |
+| Active GenLayer policy V4 | `0xBF9Aa94fD73a883Be48B381b41eB7619181BD9fA` |
 | Platform signer and registry gateway | `0x1072e78B72840BbC921493ea1C97dC5CAA54598F` |
 | Evaluation network | GenLayer StudioNet |
 | Payment network | Base Sepolia |
@@ -946,11 +952,11 @@ The production flow has been validated with real requests.
 Repeating the same request with the same idempotency key returned the same
 request ID and Base transaction hash. No second payment occurred.
 
-The July 26, 2026 merchant-restricted policy test also verified one OpenAI
+The July 26, 2026 historical merchant-restricted policy test also verified one OpenAI
 denial and one Vercel-labeled approval/execution. It exposed that merchant names
-in category and justification fields are claims rather than proof. Policy V3
-therefore disables fast approval and requires prompt-comparative review for
-every request until exact recipient and evidence-backed rules are available.
+in category and justification fields are claims rather than proof. Policy V4
+removes fast approval, supports verified invoice evidence, and requires
+prompt-comparative review for every valid request.
 See [the live policy test report](docs/live-policy-test-2026-07-26.md).
 
 ### Deterministic denial
@@ -971,7 +977,8 @@ At the time of the production smoke test, the registered policy reported:
 ## Known Limitations
 
 - The current production payment rail is Base Sepolia USDC only.
-- Base Mainnet is blocked until 1Shot advertises a usable capability.
+- Base Mainnet is advertised by 1Shot but remains blocked until its isolated
+  registry, signers, secrets, worker, and real-fund launch tests are deployed.
 - X Layer and native OKB are configuration-ready but not active execution
   options.
 - There is no active user-funded vault fallback in production.
