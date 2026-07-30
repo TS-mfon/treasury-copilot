@@ -11,7 +11,7 @@ import {
 import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { friendlyError } from "@/lib/errors";
-import { hashActionPayload } from "@/lib/ownerActions";
+import { hashActionPayload, hashPolicyUpdateActionPayload } from "@/lib/ownerActions";
 import { parseTokenAmount } from "@/lib/evm";
 
 interface PolicyRow {
@@ -88,15 +88,13 @@ export default function PolicyPage() {
       const decimals = Number(selected.binding.token_decimals);
       const perTxUnits = parseTokenAmount(perTxCap, decimals);
       const weeklyUnits = parseTokenAmount(weeklyCap, decimals);
-      const thresholdUnits = 0n;
       const nonce = BigInt(selected.state.policy_nonce);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
-      const payloadHash = hashActionPayload([
-        perTxUnits.toString(),
-        weeklyUnits.toString(),
-        thresholdUnits.toString(),
-        policyText.trim(),
-      ]);
+      const payloadHash = hashPolicyUpdateActionPayload({
+        perTxCapUnits: perTxUnits.toString(),
+        weeklyCapUnits: weeklyUnits.toString(),
+        policyText: policyText.trim(),
+      });
       const signature = await signTypedDataAsync({
         domain: buildOwnerActionDomain(Number(selected.binding.chain_id), registry as Address),
         types: ownerActionTypes,
@@ -121,7 +119,6 @@ export default function PolicyPage() {
           token_decimals: decimals,
           per_tx_cap: perTxCap,
           weekly_cap: weeklyCap,
-          auto_approve_threshold: "0",
           policy_text: policyText,
           nonce: nonce.toString(),
           deadline: deadline.toString(),

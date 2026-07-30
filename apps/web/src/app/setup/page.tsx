@@ -15,7 +15,7 @@ import {
 import { parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
-import { canonicalJson, hashActionPayload } from "@/lib/ownerActions";
+import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
 
 type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base">;
 
@@ -52,7 +52,6 @@ export default function SetupPage() {
   const [agentAddress, setAgentAddress] = useState("");
   const [weeklyCap, setWeeklyCap] = useState("100");
   const [perTxCap, setPerTxCap] = useState("25");
-  const [threshold] = useState("0");
   const [whitelist, setWhitelist] = useState("");
   const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
@@ -79,8 +78,7 @@ export default function SetupPage() {
   const caps = useMemo(() => ({
     perTxCapAtto: parseTokenAmount(perTxCap || "0", tokenConfig?.decimals ?? 6).toString(),
     weeklyCapAtto: parseTokenAmount(weeklyCap || "0", tokenConfig?.decimals ?? 6).toString(),
-    thresholdAtto: parseTokenAmount(threshold || "0", tokenConfig?.decimals ?? 6).toString(),
-  }), [perTxCap, weeklyCap, threshold, tokenConfig?.decimals]);
+  }), [perTxCap, weeklyCap, tokenConfig?.decimals]);
 
   async function connectMetaMask() {
     setError("");
@@ -153,20 +151,19 @@ export default function SetupPage() {
       if (!setupChallenge.ok) throw new Error(challenge.message ?? challenge.error ?? "Could not load setup authorization");
 
       const serializedDelegation = canonicalJson(grant.raw);
-      const payloadHash = hashActionPayload([
-        effectiveAgent.toLowerCase(),
-        grant.delegatedAccount.toLowerCase(),
-        grant.chainId,
-        grant.token.toLowerCase(),
+      const payloadHash = hashSetupActionPayload({
+        agent: effectiveAgent,
+        delegatedAccount: grant.delegatedAccount,
+        chainId: grant.chainId,
+        token: grant.token,
         tokenSymbol,
-        grant.permissionContext,
+        permissionContext: grant.permissionContext,
         serializedDelegation,
-        caps.perTxCapAtto,
-        caps.weeklyCapAtto,
-        caps.thresholdAtto,
-        policyText.trim(),
-        whitelist.trim(),
-      ]);
+        perTxCapUnits: caps.perTxCapAtto,
+        weeklyCapUnits: caps.weeklyCapAtto,
+        policyText: policyText.trim(),
+        whitelist: whitelist.trim(),
+      });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
       const nonce = BigInt(challenge.nonce);
       setStatus("Confirm the owner authorization in MetaMask.");
@@ -200,7 +197,6 @@ export default function SetupPage() {
           delegation_payload: grant.raw,
           per_tx_cap: perTxCap,
           weekly_cap: weeklyCap,
-          auto_approve_threshold: threshold,
           whitelist,
           policy_text: policyText,
           nonce: nonce.toString(),

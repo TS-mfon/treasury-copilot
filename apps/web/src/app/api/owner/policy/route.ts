@@ -2,7 +2,11 @@ import { isAddress, isHex, type Address, type Hex } from "viem";
 import { amountToUnits, readPolicyState, type RegistryBinding } from "@/lib/apiServer";
 import { apiErrorResponse } from "@/lib/errors";
 import { genlayerRead, genlayerWrite } from "@/lib/genlayerServer";
-import { hashActionPayload, verifyOwnerAction } from "@/lib/ownerActions";
+import {
+  hashActionPayload,
+  hashPolicyUpdateActionPayload,
+  verifyOwnerAction,
+} from "@/lib/ownerActions";
 import { requireOwnerSession } from "@/lib/ownerSession";
 
 export const runtime = "nodejs";
@@ -87,18 +91,15 @@ export async function PUT(request: Request) {
     const decimals = Number(binding.token_decimals);
     const perTx = amountToUnits(String(body.per_tx_cap ?? ""), decimals);
     const weekly = amountToUnits(String(body.weekly_cap ?? ""), decimals);
-    const threshold = amountToUnits(String(body.auto_approve_threshold ?? ""), decimals);
-    if (threshold !== 0n) {
-      throw new Error("Fast approval has been removed. Every valid request must use GenLayer prompt-comparative review.");
-    }
+    // Policy V4 retains the legacy ABI slot, but clients cannot configure it.
+    const threshold = 0n;
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
-    const payloadHash = hashActionPayload([
-      perTx.toString(),
-      weekly.toString(),
-      threshold.toString(),
-      body.policy_text.trim(),
-    ]);
+    const payloadHash = hashPolicyUpdateActionPayload({
+      perTxCapUnits: perTx.toString(),
+      weeklyCapUnits: weekly.toString(),
+      policyText: body.policy_text.trim(),
+    });
     await verifyOwnerAction({
       registry,
       chainId,

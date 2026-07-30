@@ -24,7 +24,7 @@ import {
   genlayerRead,
   genlayerWrite,
 } from "@/lib/genlayerServer";
-import { canonicalJson, hashActionPayload, verifyOwnerAction } from "@/lib/ownerActions";
+import { canonicalJson, hashSetupActionPayload, verifyOwnerAction } from "@/lib/ownerActions";
 import { requireOwnerSession } from "@/lib/ownerSession";
 import { assertStoredDelegation, validateDelegationGrant } from "@/lib/delegationValidation";
 
@@ -48,7 +48,6 @@ function parseBody(value: unknown) {
   const delegationPayload = body.delegation_payload ?? body.delegationPayload;
   const perTxCap = body.per_tx_cap ?? body.perTxCap;
   const weeklyCap = body.weekly_cap ?? body.weeklyCap;
-  const threshold = body.auto_approve_threshold ?? body.autoApproveThreshold;
   const policyText = body.policy_text ?? body.policyText;
   const whitelist = body.whitelist ?? "";
   const nonce = BigInt(String(body.nonce ?? "-1"));
@@ -76,7 +75,6 @@ function parseBody(value: unknown) {
     delegationPayload,
     perTxCap: String(perTxCap ?? ""),
     weeklyCap: String(weeklyCap ?? ""),
-    threshold: String(threshold ?? ""),
     policyText: policyText.trim(),
     whitelist: whitelist.trim(),
     nonce,
@@ -133,10 +131,8 @@ export async function POST(request: Request) {
 
     const perTx = amountToUnits(body.perTxCap, token.decimals);
     const weekly = amountToUnits(body.weeklyCap, token.decimals);
-    const threshold = amountToUnits(body.threshold, token.decimals);
-    if (threshold !== 0n) {
-      throw new Error("Fast approval has been removed. Every valid request must use GenLayer prompt-comparative review.");
-    }
+    // Policy V4 retains the legacy ABI slot, but clients cannot configure it.
+    const threshold = 0n;
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
     const platform = platformAccount().address;
@@ -152,20 +148,19 @@ export async function POST(request: Request) {
       throw new Error("Delegated account does not match the approved wallet grant");
     }
     const serializedDelegation = canonicalJson(body.delegationPayload);
-    const payloadHash = hashActionPayload([
-      body.agent.toLowerCase(),
-      body.delegatedAccount.toLowerCase(),
-      body.chainId,
-      token.address.toLowerCase(),
-      body.tokenSymbol,
-      body.permissionContext,
+    const payloadHash = hashSetupActionPayload({
+      agent: body.agent,
+      delegatedAccount: body.delegatedAccount,
+      chainId: body.chainId,
+      token: token.address,
+      tokenSymbol: body.tokenSymbol,
+      permissionContext: body.permissionContext,
       serializedDelegation,
-      perTx.toString(),
-      weekly.toString(),
-      threshold.toString(),
-      body.policyText,
-      body.whitelist,
-    ]);
+      perTxCapUnits: perTx.toString(),
+      weeklyCapUnits: weekly.toString(),
+      policyText: body.policyText,
+      whitelist: body.whitelist,
+    });
     const registry = registryAddress();
     const currentNonce = BigInt(await genlayerRead<string>(registry, "owner_nonce", [owner]));
     if (body.nonce !== currentNonce) throw new Error("Owner setup authorization nonce is stale");

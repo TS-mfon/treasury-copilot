@@ -43,6 +43,46 @@ export function hashActionPayload(values: readonly unknown[]): Hex {
   return keccak256(stringToHex(canonicalJson(values)));
 }
 
+export function hashSetupActionPayload(params: {
+  agent: Address;
+  delegatedAccount: Address;
+  chainId: number;
+  token: Address;
+  tokenSymbol: string;
+  permissionContext: Hex;
+  serializedDelegation: string;
+  perTxCapUnits: string;
+  weeklyCapUnits: string;
+  policyText: string;
+  whitelist: string;
+}) {
+  return hashActionPayload([
+    params.agent.toLowerCase(),
+    params.delegatedAccount.toLowerCase(),
+    params.chainId,
+    params.token.toLowerCase(),
+    params.tokenSymbol,
+    params.permissionContext,
+    params.serializedDelegation,
+    params.perTxCapUnits,
+    params.weeklyCapUnits,
+    params.policyText,
+    params.whitelist,
+  ]);
+}
+
+export function hashPolicyUpdateActionPayload(params: {
+  perTxCapUnits: string;
+  weeklyCapUnits: string;
+  policyText: string;
+}) {
+  return hashActionPayload([
+    params.perTxCapUnits,
+    params.weeklyCapUnits,
+    params.policyText,
+  ]);
+}
+
 export async function verifyOwnerAction(params: {
   registry: Address;
   chainId: number;
