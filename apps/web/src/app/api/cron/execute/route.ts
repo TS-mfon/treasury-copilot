@@ -32,6 +32,13 @@ export async function GET(request: Request) {
     for (const rawPolicy of policies.slice(0, 50)) {
       if (!isAddress(rawPolicy)) continue;
       const policy = rawPolicy as Address;
+      const binding = await genlayerRead<{ active: boolean }>(
+        registry as Address,
+        "get_policy",
+        [policy],
+        "finalized",
+      );
+      if (!binding.active) continue;
       const requestIds = await listPolicyRequests(policy, "finalized");
       for (const rawRequestId of requestIds.slice(-25)) {
         let requestState = await readPolicyRequest(policy, rawRequestId, "finalized");
