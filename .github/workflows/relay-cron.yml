@@ -1,0 +1,28 @@
+name: Treasury relay cron
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: treasury-relay-cron
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Review and execute finalized requests
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail-with-body --silent --show-error \
+            --max-time 300 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://treasury-copilot-genjury.vercel.app/api/cron/execute

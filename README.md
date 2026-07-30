@@ -558,7 +558,8 @@ the server verifies the stored values.
    account all match.
 5. The server verifies evidence, queues the request using the platform signer,
    and returns `202 Accepted`.
-6. After the queue transaction finalizes, the worker requests GenLayer review.
+6. After the queue transaction finalizes, the scheduled relay worker requests
+   GenLayer review; the daily Vercel cron is a recovery path.
 7. GenLayer applies deterministic guards and prompt-comparative policy review.
 8. A denied request is recorded and never sent to 1Shot.
 9. An approved finalized request receives an execution lease.

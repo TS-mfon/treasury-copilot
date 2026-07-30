@@ -364,9 +364,11 @@ binding. The standalone `apps/relay` process only calls this authenticated
 endpoint at `/run`; it does not accept recipient, amount, delegation, or policy
 payloads.
 
-The Vercel schedule runs every minute. `POST /api/v1/spend` returns `202`
-immediately after queue submission; review and approved execution are
-asynchronous worker responsibilities.
+`POST /api/v1/spend` returns `202` immediately after queue submission. The
+primary worker is `.github/workflows/relay-cron.yml`, which calls the
+authenticated cron route every five minutes using the repository
+`CRON_SECRET`. The Hobby-compatible daily Vercel cron is an independent fallback
+scan. Both workers use the same idempotent on-chain review and execution leases.
 
 ## 9. Post-deploy smoke
 
