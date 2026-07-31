@@ -6,7 +6,7 @@ import {
   readPolicyRequest,
   reviewQueuedPolicyRequest,
 } from "@/lib/apiServer";
-import { genlayerRead } from "@/lib/genlayerServer";
+import { genlayerRead, isGenLayerCapacityError } from "@/lib/genlayerServer";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -60,8 +60,31 @@ export async function GET(request: Request) {
         }
       }
     }
-    return Response.json({ reviewed, completed, failed });
+    const capacityFailures = failed.filter((entry) => isGenLayerCapacityError(entry.error));
+    return Response.json({
+      reviewed,
+      completed,
+      failed,
+      retryable: capacityFailures.length > 0,
+    }, capacityFailures.length > 0 ? {
+      status: 503,
+      headers: { "retry-after": "30" },
+    } : undefined);
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Cron execution failed" }, { status: 500 });
+    if (isGenLayerCapacityError(error)) {
+      return Response.json({
+        error: "genlayer_busy",
+        message: "GenLayer is temporarily busy. Retry the relay worker with the same request state.",
+        retryable: true,
+      }, {
+        status: 503,
+        headers: { "retry-after": "30" },
+      });
+    }
+    return Response.json({
+      error: "cron_failed",
+      message: error instanceof Error ? error.message : "Cron execution failed",
+      retryable: false,
+    }, { status: 500 });
   }
 }

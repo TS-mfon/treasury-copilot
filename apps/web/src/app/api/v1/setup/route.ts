@@ -11,7 +11,7 @@ import {
   tokenForChainId,
   type SupportedTokenSymbol,
 } from "@treasury-copilot/shared";
-import { issueAgentApiKey } from "@/lib/apiAuth";
+import { AGENT_API_KEY_TTL_SECONDS, issueAgentApiKey } from "@/lib/apiAuth";
 import {
   amountToUnits,
   platformAccount,
@@ -250,6 +250,8 @@ export async function POST(request: Request) {
     });
 
     const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [policy]);
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const expiresAt = issuedAt + AGENT_API_KEY_TTL_SECONDS;
     const agentApiKey = issueAgentApiKey({
       keyId: randomUUID(),
       keyVersion: Number(binding.api_key_version ?? 1),
@@ -261,10 +263,13 @@ export async function POST(request: Request) {
       token: token.address,
       tokenSymbol: token.symbol,
       tokenDecimals: token.decimals,
+      issuedAt,
+      expiresAt,
     });
 
     return Response.json({
       agent_api_key: agentApiKey,
+      api_key_expires_at: expiresAt,
       agent: body.agent,
       owner,
       policy,

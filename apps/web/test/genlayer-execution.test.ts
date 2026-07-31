@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertGenLayerExecutionSucceeded } from "../src/lib/genlayerServer";
+import {
+  assertGenLayerExecutionSucceeded,
+  isGenLayerCapacityError,
+} from "../src/lib/genlayerServer";
 
 test("finalized GenLayer receipts still fail closed on contract execution errors", () => {
   assert.throws(() => assertGenLayerExecutionSucceeded({
@@ -70,4 +73,11 @@ test("successful finalized GenLayer receipts pass execution validation", () => {
       }],
     },
   }, "register_delegation"));
+});
+
+test("GenLayer execution-slot saturation is classified as retryable capacity pressure", () => {
+  assert.equal(isGenLayerCapacityError({
+    details: "Server busy: all 8 execution slots occupied, retry later",
+  }), true);
+  assert.equal(isGenLayerCapacityError(new Error("Contract not found")), false);
 });

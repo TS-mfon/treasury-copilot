@@ -69,7 +69,11 @@ Content-Type: application/json
 Accept: application/json
 ```
 
-Do not send the key in a URL, query string, log line, or user-visible prompt. The setup page shows each key once. Owners rotate keys from the authenticated dashboard.
+Do not send the key in a URL, query string, log line, or user-visible prompt.
+The setup page shows each key once. Newly issued keys expire after 30 days.
+Legacy keys without an explicit expiry are also rejected after 30 days from
+their signed `issuedAt` timestamp. Owners rotate keys from the authenticated
+dashboard before expiry or immediately after suspected disclosure.
 
 ### Who signs transactions
 
@@ -103,6 +107,7 @@ Successful setup returns:
 ```json
 {
   "agent_api_key": "tcp_<payload>.<signature>",
+  "api_key_expires_at": 0,
   "agent": "0x...",
   "owner": "0x...",
   "policy": "0x...",
@@ -116,7 +121,12 @@ Successful setup returns:
 }
 ```
 
-The setup page displays `agent_api_key` once. A new agent/policy setup receives a distinct key. Rotating a key increments the registry's on-chain `api_key_version` and issues another unique key ID; all keys with the previous version then fail registry validation. Revoking a key deactivates the policy binding and issues no replacement.
+The setup page displays `agent_api_key` once and shows its expiration time. A
+new agent/policy setup receives a distinct key with a 30-day lifetime. Rotating
+a key increments the registry's on-chain `api_key_version`, issues another
+unique key ID and 30-day expiration, and causes all previous-version keys to
+fail registry validation. Revoking a key deactivates the policy binding and
+issues no replacement.
 
 Treat the entire `tcp_` value as a secret bearer credential. Its payload is signed for integrity, not encrypted.
 
@@ -138,7 +148,8 @@ The key claims are:
   "token": "0x...",
   "tokenSymbol": "USDC",
   "tokenDecimals": 6,
-  "issuedAt": 0
+  "issuedAt": 0,
+  "expiresAt": 0
 }
 ```
 
@@ -182,7 +193,7 @@ Field rules:
 | Field | Required | Rule |
 | --- | --- | --- |
 | `agent_address` | yes | Registered EVM address |
-| `recipient` | yes | EVM address obtained from `GET /policy`, an owner-approved merchant record, or verified invoice evidence |
+| `recipient` | yes | EVM address obtained from `GET /policy`, an owner-approved merchant record, or verified invoice evidence. Merchant names in caller text are not recipient proof. |
 | `amount` | yes | Positive decimal string, USDC precision |
 | `category` | yes | 2-64 characters |
 | `justification` | yes | 4-1200 characters |
@@ -258,7 +269,7 @@ The server derives a request ID from policy, key ID, and idempotency key. On rep
 
 - same key and identical recipient/amount/category/justification/evidence: return the existing on-chain request;
 - same key with any changed field: return `idempotency_conflict`;
-- no key: generate a random request ID.
+- missing or malformed key: reject with `422 invalid_request`.
 
 Idempotency is not a replacement for on-chain replay protection. The policy always rejects a duplicate request ID.
 
@@ -330,6 +341,12 @@ Use `GET /api/v1/policy` for recipient discovery. If
 `whitelist_enabled=true`, choose only from `whitelisted_recipients`. If the list
 is empty, the agent must obtain an owner-approved recipient from the merchant or
 invoice; there is no default recipient.
+
+For merchant-restricted policies, owners should configure the exact payment
+recipient in the whitelist or require verified invoice evidence. A policy such
+as “pay X Premium” with no recipient or trusted evidence is intentionally
+fail-closed and may deny every request because merchant identity cannot be
+proven.
 
 V4 supports two evidence types:
 
@@ -403,9 +420,9 @@ HTTP behavior:
 | `400` | Malformed JSON or unsupported request shape | fix request |
 | `401` | Missing, invalid, expired, rotated, or revoked key | obtain valid key |
 | `403` | Agent, owner, policy, chain, token, or funding binding mismatch | owner/operator action |
-| `409` | Idempotency conflict or policy migration required | do not retry unchanged |
-| `422` | Invalid amount, address, evidence, category, or unsupported capability | fix fields |
-| `429` | Edge rate limit | honor `Retry-After` |
+| `409` | An existing idempotency key was reused with changed payment data, or policy migration is required | do not retry unchanged |
+| `422` | Invalid amount, address, evidence, category, idempotency-key format, or unsupported capability | fix fields |
+| `429` | Infrastructure rate limit, when enabled by the deployment plan | honor `Retry-After` |
 | `502` | GenLayer, EVM RPC, or 1Shot upstream failure | retry same key with backoff |
 | `503` | Consensus or platform configuration unavailable | retry same key with backoff |
 
@@ -427,6 +444,7 @@ HTTP behavior:
 | `insufficient_balance` | 422 | after funding |
 | `genlayer_undetermined` | 503 | yes |
 | `genlayer_unavailable` | 502 | yes |
+| `genlayer_busy` | 503 | honor `Retry-After` |
 | `execution_unavailable` | 502 | yes |
 | `platform_signer_misconfigured` | 503 | operator action |
 | `delegation_unavailable` | 422 | after setup repair |
@@ -441,6 +459,7 @@ HTTP behavior:
 | `policy_inactive` | Owner revoked the agent or policy | Owner must reactivate or reconfigure the agent |
 | `idempotency_conflict` | One key was reused with different payment details | Use the original payload or a new key for a different payment |
 | `genlayer_unavailable` | Submission, RPC, finality, or GenVM infrastructure failed | Retry the same idempotency key after backoff |
+| `genlayer_busy` | StudioNet execution slots are temporarily saturated | Honor `Retry-After`, then retry the worker or poll the existing request |
 | `execution_unavailable` | GenLayer approved, but 1Shot could not execute | Poll the same request; do not submit a duplicate |
 | `platform_signer_misconfigured` | Server signer is missing, malformed, or differs from the policy reporter | Operator must repair deployment configuration |
 
@@ -499,6 +518,7 @@ if (!response.ok) throw new Error(`${result.error}: ${result.message}`);
 - Use a unique idempotency key for each real-world invoice or payment intent.
 - Validate the recipient independently before submitting.
 - Rotate the key immediately after accidental disclosure.
+- Rotate keys before their 30-day expiry.
 - Treat `tx_hash` as authoritative only when `execution_status` is `executed`.
 - Treat `category` and `justification` as descriptions, not merchant evidence.
 - Reject or escalate policies whose `security.warnings` array is non-empty.

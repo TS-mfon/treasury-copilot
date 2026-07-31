@@ -752,7 +752,7 @@
         }
       },
       "RateLimited": {
-        "description": "Distributed edge rate limit exceeded; honor Retry-After",
+        "description": "Infrastructure rate limit exceeded when distributed edge limiting is configured; honor Retry-After",
         "content": {
           "application/json": {
             "schema": {
@@ -772,7 +772,7 @@
         }
       },
       "Unavailable": {
-        "description": "Platform signer, GenLayer consensus, or service configuration unavailable",
+        "description": "Platform signer, GenLayer consensus, execution-slot capacity, or service configuration unavailable. Honor Retry-After when present.",
         "content": {
           "application/json": {
             "schema": {

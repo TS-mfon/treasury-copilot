@@ -23,6 +23,7 @@ type SetupResult = {
   policy: Address;
   deployment_tx_hash: string | null;
   delegation_tx_hash: string;
+  api_key_expires_at: number;
 };
 
 const delegationChains: Array<{
@@ -211,6 +212,7 @@ export default function SetupPage() {
         policy: setup.policy as Address,
         deployment_tx_hash: setup.deployment_tx_hash,
         delegation_tx_hash: setup.delegation_tx_hash,
+        api_key_expires_at: setup.api_key_expires_at,
       });
       setStatus("Agent treasury registered successfully. Store the API key now; it will not be shown again.");
     } catch (err) {
@@ -355,6 +357,9 @@ export default function SetupPage() {
             Policy text
             <textarea className="field min-h-32" value={policyText} onChange={(event) => setPolicyText(event.target.value)} />
           </label>
+          <p className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
+            Merchant-specific policies need an exact recipient in the whitelist or independently verified invoice evidence. Treasury Copilot denies unsupported merchant claims instead of guessing who controls a wallet.
+          </p>
 
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
@@ -391,6 +396,10 @@ export default function SetupPage() {
                 <div>
                   <dt className="text-neutral-500">Delegation registration</dt>
                   <dd className="break-all">{setupResult.delegation_tx_hash}</dd>
+                </div>
+                <div>
+                  <dt className="text-neutral-500">API key expires</dt>
+                  <dd>{new Date(setupResult.api_key_expires_at * 1000).toLocaleString()}</dd>
                 </div>
               </dl>
             </div>

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAddress, isHex, type Address, type Hex } from "viem";
-import { issueAgentApiKey } from "@/lib/apiAuth";
+import { AGENT_API_KEY_TTL_SECONDS, issueAgentApiKey } from "@/lib/apiAuth";
 import { apiErrorResponse } from "@/lib/errors";
 import { type RegistryBinding } from "@/lib/apiServer";
 import { genlayerRead, genlayerWrite } from "@/lib/genlayerServer";
@@ -55,6 +55,8 @@ export async function POST(request: Request) {
 
     const rotation = await genlayerWrite(registry, "rotate_api_key", [policy]);
     const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [policy]);
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const expiresAt = issuedAt + AGENT_API_KEY_TTL_SECONDS;
     const agentApiKey = issueAgentApiKey({
       keyId: randomUUID(),
       keyVersion: Number(binding.api_key_version ?? 1),
@@ -66,8 +68,16 @@ export async function POST(request: Request) {
       token: binding.token_address as Address,
       tokenSymbol: binding.token_symbol,
       tokenDecimals: Number(binding.token_decimals),
+      issuedAt,
+      expiresAt,
     });
-    return Response.json({ agent_api_key: agentApiKey, policy, key_version: binding.api_key_version, rotation });
+    return Response.json({
+      agent_api_key: agentApiKey,
+      api_key_expires_at: expiresAt,
+      policy,
+      key_version: binding.api_key_version,
+      rotation,
+    });
   } catch (error) {
     return apiErrorResponse(error);
   }

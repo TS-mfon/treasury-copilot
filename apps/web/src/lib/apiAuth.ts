@@ -1,6 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isAddress, type Address } from "viem";
 
+export const AGENT_API_KEY_TTL_SECONDS = 30 * 24 * 60 * 60;
+const MAX_ISSUED_AT_CLOCK_SKEW_SECONDS = 5 * 60;
+
 export interface AgentApiKeyClaims {
   type: "agent";
   version: 1;
@@ -53,14 +56,17 @@ function normalizeClaims(raw: Record<string, unknown>): AgentApiKeyClaims {
   const issuedAt = Number(raw.issuedAt);
   const keyVersion = Number(raw.keyVersion);
   const expiresAt = raw.expiresAt === undefined ? undefined : Number(raw.expiresAt);
+  const now = Math.floor(Date.now() / 1000);
   if (raw.type !== "agent" || raw.version !== 1) throw new Error("Unsupported API key");
   if (typeof raw.keyId !== "string" || raw.keyId.length < 8) throw new Error("Invalid key id in API key");
   if (!Number.isInteger(chainId) || chainId <= 0) throw new Error("Invalid chain id in API key");
   if (!Number.isInteger(tokenDecimals) || tokenDecimals < 0 || tokenDecimals > 36) throw new Error("Invalid token decimals in API key");
   if (!Number.isInteger(issuedAt) || issuedAt <= 0) throw new Error("Invalid issued timestamp in API key");
+  if (issuedAt > now + MAX_ISSUED_AT_CLOCK_SKEW_SECONDS) throw new Error("Invalid issued timestamp in API key");
   if (!Number.isInteger(keyVersion) || keyVersion <= 0) throw new Error("Invalid key version in API key");
   if (expiresAt !== undefined && (!Number.isInteger(expiresAt) || expiresAt <= issuedAt)) throw new Error("Invalid expiry in API key");
-  if (expiresAt !== undefined && expiresAt < Math.floor(Date.now() / 1000)) throw new Error("API key expired");
+  const effectiveExpiresAt = expiresAt ?? issuedAt + AGENT_API_KEY_TTL_SECONDS;
+  if (effectiveExpiresAt <= now) throw new Error("API key expired");
   if (typeof raw.tokenSymbol !== "string" || raw.tokenSymbol.trim() === "") throw new Error("Invalid token symbol in API key");
 
   return {
@@ -77,16 +83,18 @@ function normalizeClaims(raw: Record<string, unknown>): AgentApiKeyClaims {
     tokenSymbol: raw.tokenSymbol,
     tokenDecimals,
     issuedAt,
-    expiresAt,
+    expiresAt: effectiveExpiresAt,
   };
 }
 
 export function issueAgentApiKey(claims: Omit<AgentApiKeyClaims, "type" | "version" | "issuedAt"> & { issuedAt?: number }) {
+  const issuedAt = claims.issuedAt ?? Math.floor(Date.now() / 1000);
   const payload = base64UrlEncode(JSON.stringify({
     ...claims,
     type: "agent",
     version: 1,
-    issuedAt: claims.issuedAt ?? Math.floor(Date.now() / 1000),
+    issuedAt,
+    expiresAt: claims.expiresAt ?? issuedAt + AGENT_API_KEY_TTL_SECONDS,
   }));
   return `tcp_${payload}.${signPayload(payload)}`;
 }

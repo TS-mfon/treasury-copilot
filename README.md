@@ -605,6 +605,8 @@ Important rules:
 - Do not create a new idempotency key for the same payment.
 - Check both the policy verdict and execution status.
 - Never put the API key in a URL, log, public prompt, or client-side bundle.
+- Newly issued API keys expire after 30 days. Rotate them before expiry and
+  immediately after disclosure.
 
 See [docs/api.md](docs/api.md) for complete request and response schemas.
 
@@ -638,7 +640,7 @@ idempotency key.
 - Same idempotency key and same payload: return the existing request.
 - Same idempotency key and changed payload: reject with
   `idempotency_conflict`.
-- No idempotency key: create a random request ID.
+- Missing or malformed idempotency key: reject with `invalid_request`.
 
 The GenLayer policy separately rejects duplicate request IDs. 1Shot execution
 is protected by an on-chain execution state and lease. These layers prevent a
@@ -959,6 +961,11 @@ in category and justification fields are claims rather than proof. Policy V4
 removes fast approval, supports verified invoice evidence, and requires
 prompt-comparative review for every valid request.
 See [the live policy test report](docs/live-policy-test-2026-07-26.md).
+
+The July 31, 2026 production API audit verified authentication, binding,
+validation, prompt-injection denial, merchant-recipient fail-closed behavior,
+cap enforcement, idempotent replay, and GenLayer capacity recovery. See
+[the live API audit](docs/live-api-audit-2026-07-31.md).
 
 ### Deterministic denial
 

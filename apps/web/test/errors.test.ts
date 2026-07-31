@@ -57,3 +57,17 @@ test("upstream and request errors receive stable status codes", async () => {
   assert.equal(invalidRequest.status, 422);
   assert.equal((await invalidRequest.json()).error, "invalid_request");
 });
+
+test("idempotency format errors are not mislabeled as reuse conflicts", async () => {
+  const malformed = apiErrorResponse(new Error(
+    "idempotency_key must be 8-128 characters using letters, numbers, dot, underscore, colon, or dash",
+  ));
+  assert.equal(malformed.status, 422);
+  assert.equal((await malformed.json()).error, "invalid_request");
+
+  const reused = apiErrorResponse(new Error(
+    "idempotency_key was already used with a different request",
+  ));
+  assert.equal(reused.status, 409);
+  assert.equal((await reused.json()).error, "idempotency_conflict");
+});

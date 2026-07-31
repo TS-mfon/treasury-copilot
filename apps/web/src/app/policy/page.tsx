@@ -28,7 +28,6 @@ interface PolicyRow {
     owner: Address;
     per_tx_cap_atto: string;
     weekly_cap_atto: string;
-    auto_approve_threshold_atto: string;
     policy_text: string;
     policy_nonce: string;
     whitelist_enabled: boolean;
@@ -219,7 +218,7 @@ export default function PolicyPage() {
             <label className="grid gap-2 text-sm font-medium">Per-request cap<input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} /></label>
             <label className="grid gap-2 text-sm font-medium">Weekly cap<input className="field" value={weeklyCap} onChange={(event) => setWeeklyCap(event.target.value)} /></label>
           </div>
-          {BigInt(selected?.state.auto_approve_threshold_atto ?? "0") > 0n && (
+          {Number(selected?.state.contract_version ?? "0") < 4 && (
             <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
               This legacy policy is blocked from creating new agent requests. Re-register the delegation to migrate to policy V4, which reviews every valid request.
             </p>

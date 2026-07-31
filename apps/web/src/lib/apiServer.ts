@@ -191,7 +191,6 @@ export function publicPolicyState(policy: PolicyState) {
     evm_chain_id: policy.evm_chain_id ?? "",
     per_tx_cap_atto: policy.per_tx_cap_atto ?? "0",
     weekly_cap_atto: policy.weekly_cap_atto ?? "0",
-    auto_approve_threshold_atto: policy.auto_approve_threshold_atto ?? "0",
     weekly_spent_atto: policy.weekly_spent_atto ?? "0",
     policy_text: policy.policy_text ?? "",
     policy_nonce: policy.policy_nonce ?? "0",

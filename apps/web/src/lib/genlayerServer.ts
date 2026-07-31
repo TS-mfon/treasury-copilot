@@ -10,6 +10,14 @@ import { errorMessage } from "@/lib/errors";
 type GenLayerServerClient = ReturnType<typeof createClient>;
 type GenLayerAccount = ReturnType<typeof createAccount>;
 type GenLayerHash = Hex & { length: 66 };
+const GENLAYER_READ_RETRY_DELAYS_MS = [500, 1500, 3500] as const;
+
+export function isGenLayerCapacityError(error: unknown) {
+  const message = errorMessage(error).toLowerCase();
+  return message.includes("execution slots occupied")
+    || message.includes("server busy")
+    || message.includes("retry later");
+}
 
 function privateKey() {
   const key = process.env.AGENT_SIGNER_PRIVATE_KEY?.trim();
@@ -106,15 +114,23 @@ export async function genlayerRead<T>(
   args: unknown[] = [],
   state: "latest" | "finalized" = "latest",
 ) {
-  return await client().readContract({
-    address: canonicalGenLayerAddress(address),
-    functionName,
-    args: args as never[],
-    jsonSafeReturn: true,
-    transactionHashVariant: state === "finalized"
-      ? TransactionHashVariant.LATEST_FINAL
-      : TransactionHashVariant.LATEST_NONFINAL,
-  }) as T;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client().readContract({
+        address: canonicalGenLayerAddress(address),
+        functionName,
+        args: args as never[],
+        jsonSafeReturn: true,
+        transactionHashVariant: state === "finalized"
+          ? TransactionHashVariant.LATEST_FINAL
+          : TransactionHashVariant.LATEST_NONFINAL,
+      }) as T;
+    } catch (error) {
+      const delay = GENLAYER_READ_RETRY_DELAYS_MS[attempt];
+      if (!isGenLayerCapacityError(error) || delay === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
 }
 
 export async function genlayerSubmitWrite(

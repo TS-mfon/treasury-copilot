@@ -8,7 +8,11 @@
 
 import { randomUUID } from "node:crypto";
 import type { Address } from "viem";
-import { issueAgentApiKey, type AgentApiKeyClaims } from "@/lib/apiAuth";
+import {
+  AGENT_API_KEY_TTL_SECONDS,
+  issueAgentApiKey,
+  type AgentApiKeyClaims,
+} from "@/lib/apiAuth";
 
 export interface AgentKeyMetadata {
   keyId: string;
@@ -82,8 +86,7 @@ export interface RotateAgentKeyResult {
 export function rotateAgentKey(options: RotateAgentKeyOptions): RotateAgentKeyResult {
   const nextVersion = options.prevVersion + 1;
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt =
-    options.expiresInSeconds != null ? issuedAt + options.expiresInSeconds : undefined;
+  const expiresAt = issuedAt + (options.expiresInSeconds ?? AGENT_API_KEY_TTL_SECONDS);
 
   const keyId = randomUUID();
   const agent_api_key = issueAgentApiKey({

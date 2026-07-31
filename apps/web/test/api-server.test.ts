@@ -96,6 +96,7 @@ test("agent policy responses redact executable delegation secrets", () => {
   assert.equal(state.per_tx_cap_atto, "25000000");
   assert.equal("delegation_payload" in state, false);
   assert.equal("delegation_context" in state, false);
+  assert.equal("auto_approve_threshold_atto" in state, false);
 });
 
 test("legacy fast approval is surfaced as an explicit security warning", () => {

@@ -70,7 +70,7 @@ export default function DocsPage() {
           </p>
           <pre className="terminal mt-4 overflow-auto p-4 text-xs">Authorization: Bearer tcp_***</pre>
           <p className="mt-3 text-xs text-neutral-500">
-            The MetaMask permission does not create the key. A fresh unique key is issued only after the GenLayer policy and delegation are finalized, registered, and read back successfully. Keys are shown once during setup. Store them securely. Rotation increments the on-chain key version and invalidates older keys; revocation deactivates the policy binding.
+            The MetaMask permission does not create the key. A fresh unique key is issued only after the GenLayer policy and delegation are finalized, registered, and read back successfully. Keys are shown once and expire after 30 days. Store them securely. Rotation increments the on-chain key version and invalidates older keys; revocation deactivates the policy binding.
           </p>
         </section>
 
@@ -84,6 +84,9 @@ export default function DocsPage() {
           </ol>
           <p className="mt-4 text-sm text-neutral-400">
             The key identifies the agent but never signs a blockchain transaction. Every GenLayer write is signed by the server platform wallet after the key, registry, policy, funding account, chain, token, and execution reporter are verified.
+          </p>
+          <p className="mt-3 text-sm text-warning">
+            Merchant names are not recipient proof. A merchant-specific policy needs an owner-approved recipient or independently verified invoice evidence; otherwise requests fail closed.
           </p>
         </section>
 
@@ -237,7 +240,7 @@ export default function DocsPage() {
   "retryable": true
 }`}</pre>
           <p className="mt-4 text-sm text-neutral-400">
-            Retry only 502 and 503 responses, use exponential backoff, and keep the same idempotency key. Do not automatically retry authentication, validation, policy, or conflict errors.
+            Retry only 502 and 503 responses, honor Retry-After when present, use exponential backoff, and keep the same idempotency key. Do not automatically retry authentication, validation, policy, or conflict errors. Malformed idempotency keys return 422; 409 is reserved for reusing an existing key with different payment data.
           </p>
         </section>
 

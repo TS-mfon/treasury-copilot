@@ -115,7 +115,7 @@ function apiCode(message: string) {
   if (value.includes("bearer") || value.includes("api key")) return ["invalid_api_key", 401] as const;
   if (value.includes("policy") && value.includes("inactive")) return ["policy_inactive", 403] as const;
   if (value.includes("unknown request") || value.includes("request not found")) return ["request_not_found", 404] as const;
-  if (value.includes("idempotency")) return ["idempotency_conflict", 409] as const;
+  if (value.includes("idempotency_key was already used")) return ["idempotency_conflict", 409] as const;
   if (value.includes("policy migration required")) return ["policy_migration_required", 409] as const;
   if (value.includes("evidence") || value.includes("invoice")) return ["invalid_evidence", 422] as const;
   if (value.includes("amount") || value.includes("decimal")) return ["invalid_amount", 422] as const;
@@ -138,6 +138,7 @@ function apiCode(message: string) {
     || value.includes("invalid request id")
     || value.includes("invalid spend payload")
     || value.includes("history limit")
+    || value.includes("idempotency_key must be")
     || value.includes("fast approval is disabled")
   ) return ["invalid_request", 422] as const;
   return ["request_failed", 400] as const;
