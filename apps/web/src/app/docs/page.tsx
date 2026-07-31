@@ -156,10 +156,10 @@ export default function DocsPage() {
         <section className="panel rounded-lg p-6">
           <h2 className="text-xl font-semibold">Merchant identity and policy safety</h2>
           <p className="mt-2 text-neutral-400">
-            Category and justification are untrusted claims. Policy V4 accepts up to three verified evidence items: an HTTPS invoice whose fetched bytes match a SHA-256 digest, or an EIP-712 signed invoice bound to the exact policy, chain, token, recipient, amount, timestamps, and content hash.
+            Category and justification are untrusted claims. Policy V5 accepts up to three verified evidence items: an HTTPS invoice whose fetched bytes match a SHA-256 digest, or an EIP-712 signed invoice bound to the exact policy, chain, token, recipient, amount, timestamps, and content hash.
           </p>
           <p className="mt-3 text-neutral-400">
-            Fast approval has been removed. Every valid V4 request receives GenLayer prompt-comparative review. V2 and V3 policies are blocked from new API spending until the owner re-registers the delegation and migrates to V4.
+            Fast approval has been removed. Every valid V5 request begins GenLayer prompt-comparative review in the original submission transaction. V4 remains supported through automatic recovery; V2 and V3 policies are blocked.
           </p>
         </section>
 
@@ -180,9 +180,10 @@ export default function DocsPage() {
           <h2 className="text-xl font-semibold">Lifecycle and polling</h2>
           <div className="mt-4 grid gap-px overflow-hidden border border-outline bg-outline sm:grid-cols-4">
             {[
-              ["submitted", "Platform signer queued the request; the API returned 202."],
-              ["review_pending", "The queue transaction is finalized and awaits comparative review."],
-              ["pending", "The GenLayer review transaction is processing."],
+              ["submitted", "The platform signer submitted the policy transaction; the API returned 202."],
+              ["reviewing", "V5 comparative consensus is running in the submission transaction."],
+              ["review_pending", "A legacy V4 queue is waiting for automatic recovery review."],
+              ["pending", "A legacy review transaction is processing."],
               ["denied", "A deterministic guard or comparative review rejected the request."],
               ["ready", "The approved finalized request is ready for 1Shot."],
               ["executing", "The platform holds the on-chain execution lease."],

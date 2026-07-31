@@ -91,8 +91,9 @@ The production release currently supports:
   sensitive owner actions.
 - On-chain request verdicts, execution status, failures, and EVM transaction
   hashes.
-- Policy V4 asynchronous submission with prompt-comparative review for every
-  valid request.
+- Newly registered policies use V5, which starts prompt-comparative review in
+  the original GenLayer submission transaction. Existing V4 policies remain
+  compatible through immediate post-response review with cron recovery.
 - HTTPS invoice digest and EIP-712 signed-invoice evidence verification.
 - Idempotency-key recovery when a client times out before receiving a response.
 
@@ -409,8 +410,8 @@ In Treasury Copilot:
 
 - hard security rules such as identity, caps, weekly budget, whitelist, and
   replay protection are checked deterministically;
-- policy V4 sends every valid request through prompt-comparative review after hard
-  checks pass;
+- policy V5 sends every valid request through prompt-comparative review in the
+  original submission transaction after hard checks pass;
 - legacy V2 and V3 policies are blocked from new API spending until migration;
 - the application waits for GenLayer finality before payment execution.
 
@@ -424,7 +425,7 @@ Official references:
 
 ### No Fast-Approval Bypass
 
-Fast approval has been removed from the active policy path. V4 does not permit
+Fast approval has been removed from the active policy path. V5 does not permit
 an amount threshold to bypass semantic policy review.
 
 Example policy:
@@ -433,7 +434,7 @@ Example policy:
 - Per-request cap: `25 USDC`
 - Semantic review: `required`
 
-Policy V4 sends both a `3 USDC` request and a `10 USDC` request through
+Policy V5 sends both a `3 USDC` request and a `10 USDC` request through
 prompt-comparative policy evaluation after deterministic checks. A `26 USDC`
 request is denied before model review because it exceeds the per-request cap.
 Splitting a purchase into smaller requests no longer avoids semantic review,
@@ -556,11 +557,13 @@ the server verifies the stored values.
 3. The API reloads the current registry and policy from GenLayer.
 4. The API confirms that key, owner, agent, policy, chain, token, and delegated
    account all match.
-5. The server verifies evidence, queues the request using the platform signer,
-   and returns `202 Accepted`.
-6. After the queue transaction finalizes, the scheduled relay worker requests
-   GenLayer review; the daily Vercel cron is a recovery path.
-7. GenLayer applies deterministic guards and prompt-comparative policy review.
+5. The server verifies evidence and submits one GenLayer transaction using the
+   platform signer, then returns `202 Accepted`.
+6. That same transaction applies deterministic guards and starts
+   prompt-comparative review immediately. No scheduler is required to initiate
+   a normal V5 review.
+7. The recovery worker reconciles legacy V4 requests and resumes approved
+   payments that were interrupted after review.
 8. A denied request is recorded and never sent to 1Shot.
 9. An approved finalized request receives an execution lease.
 10. 1Shot executes the constrained USDC transfer on Base Sepolia.
@@ -957,7 +960,7 @@ request ID and Base transaction hash. No second payment occurred.
 
 The July 26, 2026 historical merchant-restricted policy test also verified one OpenAI
 denial and one Vercel-labeled approval/execution. It exposed that merchant names
-in category and justification fields are claims rather than proof. Policy V4
+in category and justification fields are claims rather than proof. Policy V5
 removes fast approval, supports verified invoice evidence, and requires
 prompt-comparative review for every valid request.
 See [the live policy test report](docs/live-policy-test-2026-07-26.md).

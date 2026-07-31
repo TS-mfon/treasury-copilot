@@ -106,13 +106,14 @@ async function signedRequest({ amountAtto, category, justification, label }) {
   };
 }
 
-async function queueReviewAndFinalize(example) {
+async function submitAndFinalize(example) {
   const request = await signedRequest(example);
   const submitOutput = runGenlayer(["write", policy, "queue_request", "--args", ...request.args]);
   const submitHash = transactionHash(submitOutput);
-  waitForFinalized(`${example.label} queue`, submitHash);
-  let state = readRequest(request.requestId, false);
+  waitForFinalized(`${example.label} submission`, submitHash);
+  const state = readRequest(request.requestId, false);
   let reviewHash = null;
+  // V4 compatibility only. V5 performs comparative review in queue_request.
   if (state.verdict === "pending") {
     const reviewOutput = runGenlayer(["write", policy, "review_request", "--args", request.requestId]);
     reviewHash = transactionHash(reviewOutput);
@@ -123,8 +124,8 @@ async function queueReviewAndFinalize(example) {
   return {
     label: example.label,
     request_id: request.requestId,
-    queue_tx_hash: submitHash,
-    review_tx_hash: reviewHash,
+    submission_tx_hash: submitHash,
+    legacy_review_tx_hash: reviewHash,
     state,
   };
 }
@@ -152,7 +153,7 @@ const examples = [
 
 const results = [];
 for (const example of examples) {
-  results.push(await queueReviewAndFinalize(example));
+  results.push(await submitAndFinalize(example));
 }
 
 if (results[0].state.verdict !== "approved") {

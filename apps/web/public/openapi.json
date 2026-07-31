@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Treasury Copilot Agent API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "HTTP API for policy-gated agent spending. Current automatic execution uses Base Sepolia test USDC. POST /spend is asynchronous and returns 202 after GenLayer submission."
   },
   "servers": [
@@ -19,8 +19,8 @@
   "paths": {
     "/spend": {
       "post": {
-        "summary": "Queue a spend request",
-        "description": "Verifies the API key, V4 policy binding, exact token units, and optional evidence; submits queue_request with the platform signer; then returns 202. Every valid request is later reviewed with GenLayer prompt-comparative consensus.",
+        "summary": "Submit a spend request",
+        "description": "Verifies the API key, policy binding, exact token units, and optional evidence; submits queue_request with the platform signer; then returns 202. Policy V5 starts GenLayer prompt-comparative review inside that same transaction. Legacy V4 requests use bounded automatic review with cron recovery.",
         "operationId": "createSpendRequest",
         "requestBody": {
           "required": true,
@@ -523,13 +523,13 @@
             "enum": ["deterministic", "prompt_comparative"]
           },
           "status": {
-            "enum": ["submitted", "review_pending", "pending", "approved", "denied", "ready", "executing", "failed", "executed", "not_applicable"]
+            "enum": ["submitted", "reviewing", "review_pending", "pending", "approved", "denied", "ready", "executing", "failed", "executed", "not_applicable"]
           },
           "reasoning": {
             "type": "string"
           },
           "execution_status": {
-            "enum": ["submitted", "review_pending", "ready", "executing", "failed", "executed", "not_applicable"]
+            "enum": ["submitted", "reviewing", "review_pending", "ready", "executing", "failed", "executed", "not_applicable"]
           },
           "execution_error": {
             "type": "string"

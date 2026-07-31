@@ -241,10 +241,11 @@ Field rules:
 ```
 
 The normal response is `202 Accepted` with `Location` and `Retry-After: 10`.
-The API returns after submitting the deterministic queue transaction; it does
-not hold the HTTP connection open for comparative review or payment execution.
-The authenticated worker reviews finalized queued requests and executes approved
-requests. Poll the returned URL.
+The API returns after submitting the GenLayer policy transaction; it does not
+hold the HTTP connection open for consensus finality or payment execution.
+Policy V5 performs deterministic checks and prompt-comparative review in that
+same transaction. The authenticated worker is a recovery and approved-execution
+path, not the normal review trigger. Poll the returned URL.
 
 `idempotent_replay: true` means the API returned an existing on-chain request.
 No new GenLayer request or payout was submitted. The original request ID and
@@ -256,10 +257,11 @@ Base transaction hash remain in `request`.
 | --- | --- |
 | `deterministic` | A cap, budget, amount, or whitelist rule decided the request |
 | `prompt_comparative` | GenLayer prompt-comparative consensus evaluated the policy |
-V4 has no fast-approval decision mode. Every valid request uses
+V5 has no fast-approval decision mode. Every valid request uses
 `prompt_comparative`. Hard-invalid requests such as zero amounts, exceeded caps,
-or non-whitelisted recipients are denied deterministically. V2 and V3 policies
-are blocked from new API spending until the owner migrates them to V4.
+or non-whitelisted recipients are denied deterministically. V4 requests remain
+supported through the bounded automatic-review and recovery-worker path. V2 and
+V3 policies are blocked from new API spending.
 
 ## 5. Idempotency
 
@@ -384,9 +386,10 @@ Status meanings:
 
 | Status | Meaning |
 | --- | --- |
-| `submitted` | Queue transaction was submitted and the API returned `202` |
-| `review_pending` | Finalized queue state is waiting for GenLayer review |
-| `pending` | Verdict has not been finalized |
+| `submitted` | The policy transaction was submitted and the API returned `202` |
+| `reviewing` | V5 prompt-comparative consensus is running in the submission transaction |
+| `review_pending` | Legacy V4 queue state is waiting for recovery review |
+| `pending` | A legacy review has not finalized |
 | `denied` | Policy or cap rejected the request |
 | `approved` | Finalized approval is ready for execution |
 | `ready` | Execution can be claimed by the platform worker |

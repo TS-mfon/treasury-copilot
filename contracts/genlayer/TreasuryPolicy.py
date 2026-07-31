@@ -146,7 +146,7 @@ class TreasuryPolicy(gl.Contract):
         self.auto_approve_threshold_atto = auto_approve_threshold_atto
         if auto_approve_threshold_atto != u256(0):
             raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} Policy V4 removed fast approval; threshold must be 0"
+                f"{ERROR_EXPECTED} Policy V5 removed fast approval; threshold must be 0"
             )
         self.policy_text = policy_text
         self.weekly_spent_atto = u256(0)
@@ -257,16 +257,22 @@ class TreasuryPolicy(gl.Contract):
             evidence_digest,
             invoice_key,
             "pending",
-            "Awaiting GenLayer prompt-comparative review",
+            "GenLayer prompt-comparative review is running",
             "",
-            "review_pending",
+            "reviewing",
             False,
         )
-        return {
-            "request_id": request_id,
-            "verdict": "pending",
-            "reasoning": "Awaiting GenLayer prompt-comparative review",
-        }
+        verdict = self._evaluate_with_llm(
+            recipient,
+            amount_atto,
+            category,
+            justification,
+            evidence_json,
+        )
+        req = self.requests[request_id]
+        if bool(verdict["approved"]):
+            return self._finalize_approval(req, str(verdict["reasoning"]))
+        return self._finalize_denial(req, str(verdict["reasoning"]))
 
     @gl.public.write
     def review_request(self, request_id: str) -> dict:
@@ -384,7 +390,7 @@ class TreasuryPolicy(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Auto threshold exceeds per-transaction cap")
         if auto_approve_threshold_atto != u256(0):
             raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} Policy V4 removed fast approval; threshold must be 0"
+                f"{ERROR_EXPECTED} Policy V5 removed fast approval; threshold must be 0"
             )
         if len(str(policy_text).strip()) < 8 or len(str(policy_text)) > 4000:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Policy text must be 8-4000 characters")
@@ -442,7 +448,7 @@ class TreasuryPolicy(gl.Contract):
     @gl.public.view
     def get_policy(self) -> dict:
         return {
-            "contract_version": "4",
+            "contract_version": "5",
             "owner": str(self.owner),
             "registry": str(self.registry),
             "authorized_agent": str(self.authorized_agent),

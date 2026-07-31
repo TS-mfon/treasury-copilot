@@ -100,7 +100,7 @@ async function matchingPolicy(owner: Address, body: ReturnType<typeof parseBody>
     ) {
       const policyAddress = policy as Address;
       const state = await readPolicyState(policyAddress);
-      if (state.contract_version === "4") {
+      if (state.contract_version === "5") {
         return { policy: policyAddress, legacyPolicies };
       }
       legacyPolicies.push(policyAddress);
@@ -131,7 +131,7 @@ export async function POST(request: Request) {
 
     const perTx = amountToUnits(body.perTxCap, token.decimals);
     const weekly = amountToUnits(body.weeklyCap, token.decimals);
-    // Policy V4 retains the legacy ABI slot, but clients cannot configure it.
+    // Policy V5 retains the legacy ABI slot, but clients cannot configure it.
     const threshold = 0n;
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 

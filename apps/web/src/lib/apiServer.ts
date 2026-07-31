@@ -100,6 +100,9 @@ export function policySecurityProfile(policy: PolicyState) {
   if (version > 0 && version < 4) {
     warnings.push("This policy must be migrated to V4 before the asynchronous agent API can accept new spend requests.");
   }
+  if (version === 4) {
+    warnings.push("This policy uses the legacy two-transaction review flow. Re-register the delegation to migrate to V5 immediate review.");
+  }
   if (!policy.delegation_registered) {
     warnings.push("No executable delegation is registered for this policy.");
   }
@@ -108,6 +111,7 @@ export function policySecurityProfile(policy: PolicyState) {
     contract_version: String(policy.contract_version ?? ""),
     semantic_review_required_for_all_requests: version >= 3,
     asynchronous_review_supported: version >= 4,
+    immediate_review_submission: version >= 5,
     legacy_fast_approval_active: version > 0 && version < 3 && threshold > 0n,
     warnings,
   };

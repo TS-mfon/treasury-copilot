@@ -157,7 +157,7 @@ FINALIZED
 execution success
 verdict=approved or denied according to validator consensus
 reasoning is present
-finalized=true after the `review_request` transaction finalizes
+finalized=true after the V5 submission transaction finalizes
 ```
 
 For each transaction, record:

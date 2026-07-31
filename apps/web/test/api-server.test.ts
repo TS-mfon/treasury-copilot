@@ -119,7 +119,20 @@ test("policy V3 requires semantic review for every request", () => {
   assert.equal(profile.legacy_fast_approval_active, false);
   assert.equal(profile.semantic_review_required_for_all_requests, true);
   assert.equal(profile.asynchronous_review_supported, false);
+  assert.equal(profile.immediate_review_submission, false);
   assert.match(profile.warnings[0] ?? "", /migrated to V4/);
+});
+
+test("policy V5 starts comparative review in the submission transaction", () => {
+  const profile = policySecurityProfile({
+    contract_version: "5",
+    auto_approve_threshold_atto: "0",
+    delegation_registered: true,
+  });
+  assert.equal(profile.semantic_review_required_for_all_requests, true);
+  assert.equal(profile.asynchronous_review_supported, true);
+  assert.equal(profile.immediate_review_submission, true);
+  assert.deepEqual(profile.warnings, []);
 });
 
 test("legacy policies are blocked from asynchronous agent spending", () => {

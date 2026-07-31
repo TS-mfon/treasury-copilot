@@ -218,9 +218,9 @@ export default function PolicyPage() {
             <label className="grid gap-2 text-sm font-medium">Per-request cap<input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} /></label>
             <label className="grid gap-2 text-sm font-medium">Weekly cap<input className="field" value={weeklyCap} onChange={(event) => setWeeklyCap(event.target.value)} /></label>
           </div>
-          {Number(selected?.state.contract_version ?? "0") < 4 && (
+          {Number(selected?.state.contract_version ?? "0") < 5 && (
             <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
-              This legacy policy is blocked from creating new agent requests. Re-register the delegation to migrate to policy V4, which reviews every valid request.
+              Re-register the delegation to migrate this policy to V5 immediate review. V4 requests still work through automatic recovery; V2 and V3 are blocked.
             </p>
           )}
           <label className="grid gap-2 text-sm font-medium">
