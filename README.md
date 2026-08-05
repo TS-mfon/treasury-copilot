@@ -1,5 +1,14 @@
 # Treasury Copilot
 
+Copyright (c) 2026 [Mfon Ante]
+
+All rights reserved.
+
+No permission is granted to any person or organisation to use, copy, modify, merge, publish, distribute, sublicense, or sell copies of this software or its associated documentation files.
+
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND.
+
+
 <p align="center">
   <img src="apps/web/public/logo.svg" alt="Treasury Copilot logo" width="96" />
 </p>
