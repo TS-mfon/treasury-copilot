@@ -87,3 +87,107 @@ textarea {
 ::selection {
   background: rgba(167, 139, 250, 0.3);
 }
+
+.reveal {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation: section-reveal linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 26%;
+  }
+}
+
+.payment-flow {
+  width: 100%;
+  min-height: 420px;
+}
+
+.payment-flow svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+}
+
+.flow-node-active {
+  animation: flow-node-pulse 1.8s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.flow-packet {
+  animation: flow-packet-pulse 1.1s ease-in-out infinite;
+}
+
+.flow-validator-pulse {
+  animation: flow-validator-pulse 1.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes flow-node-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+@keyframes flow-packet-pulse {
+  0%, 100% { opacity: .7; }
+  50% { opacity: 1; }
+}
+
+@keyframes flow-validator-pulse {
+  0%, 100% { transform: scale(1); opacity: .7; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@keyframes section-reveal {
+  from { transform: translateY(18px); }
+  to { transform: translateY(0); }
+}
+
+::view-transition-old(public-page),
+::view-transition-new(public-page) {
+  animation-duration: 200ms;
+  animation-timing-function: ease-out;
+}
+
+::view-transition-old(public-page) {
+  animation-name: public-page-out;
+}
+
+::view-transition-new(public-page) {
+  animation-name: public-page-in;
+}
+
+@keyframes public-page-out {
+  to { opacity: 0; transform: translateY(-6px); }
+}
+
+@keyframes public-page-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal-visible {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+  .flow-node-active,
+  .flow-packet,
+  .flow-validator-pulse {
+    animation: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .payment-flow {
+    min-height: 900px;
+  }
+}

@@ -1,8 +1,9 @@
-import Link from "next/link";
-import { ArrowRight, Braces, CheckCircle2, Code2, FileCheck2, KeyRound, LockKeyhole, RotateCcw, ShieldCheck, WalletCards } from "lucide-react";
+import { ArrowRight, Braces, CheckCircle2, Code2, FileCheck2, KeyRound, RotateCcw, ShieldCheck, WalletCards } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
-import { TreasuryFlowAnimation } from "@/components/TreasuryFlowAnimation";
+import { PublicTransitionLink } from "@/components/PublicTransitionLink";
+import { Reveal } from "@/components/Reveal";
+import { TreasuryPaymentFlow } from "@/components/TreasuryPaymentFlow";
 
 const safeguards = [
   { icon: KeyRound, title: "No agent private keys", detail: "Agents authenticate through scoped API keys that identify them but never sign blockchain transactions." },
@@ -20,16 +21,13 @@ const lifecycle = [
 export default function Home() {
   return (
     <Shell>
-      <section className="relative flex min-h-[680px] items-center overflow-hidden border-b border-outline py-16 sm:min-h-[720px]">
-        <div className="pointer-events-none absolute inset-0 opacity-35 lg:left-[25%] lg:opacity-75">
-          <TreasuryFlowAnimation />
-        </div>
-        <div className="relative z-10 max-w-3xl bg-black/80 py-6 pr-4 backdrop-blur-sm lg:bg-black/65">
+      <section className="border-b border-outline py-20 sm:py-28">
+        <div className="max-w-4xl">
           <div className="badge text-success">
             <span className="mr-2 h-1.5 w-1.5 rounded-full bg-success" />
             GENLAYER POLICY ENGINE ONLINE
           </div>
-          <h1 className="mt-7 text-5xl font-bold leading-[1.04] text-ink sm:text-7xl">Treasury Copilot</h1>
+          <h1 className="mt-7 text-5xl font-bold leading-[1.04] text-ink sm:text-7xl lg:text-8xl">Treasury Copilot</h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-neutral-300 sm:text-xl">
             The financial control plane for autonomous agents. Give agents useful USDC spending power without giving them unrestricted custody.
           </p>
@@ -37,9 +35,9 @@ export default function Home() {
             <SetupAccessLink href="/setup" className="inline-flex items-center gap-2 rounded-md bg-purple px-5 py-3 text-sm font-bold text-black transition hover:bg-violet-300">
               Configure an agent <ArrowRight size={17} />
             </SetupAccessLink>
-            <Link href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline bg-surface-low px-5 py-3 text-sm font-semibold text-ink transition hover:bg-surface-high">
+            <PublicTransitionLink href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline bg-surface-low px-5 py-3 text-sm font-semibold text-ink transition hover:bg-surface-high">
               <Code2 size={17} /> API reference
-            </Link>
+            </PublicTransitionLink>
           </div>
           <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[11px] text-neutral-500">
             <span>BASE SEPOLIA USDC</span>
@@ -47,41 +45,48 @@ export default function Home() {
             <span>METAMASK ERC-7715</span>
           </div>
         </div>
+        <div className="mt-16 grid grid-cols-2 border-y border-outline font-mono text-[10px] text-neutral-500 sm:grid-cols-4">
+          {["OWNER CUSTODY", "AGENT HTTP API", "GENLAYER REVIEW", "1SHOT SETTLEMENT"].map((label, index) => (
+            <div key={label} className="border-b border-outline px-4 py-4 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0">
+              <span className="mr-2 text-purple">0{index + 1}</span>{label}
+            </div>
+          ))}
+        </div>
       </section>
 
-      <section className="border-b border-outline py-20">
+      <Reveal id="payment-journey" className="scroll-mt-20 border-b border-outline py-20 sm:py-24">
         <div className="max-w-3xl">
           <p className="font-mono text-xs text-purple">THE PAYMENT JOURNEY</p>
           <h2 className="mt-3 text-3xl font-semibold sm:text-4xl">From agent intent to auditable execution.</h2>
           <p className="mt-4 text-base leading-7 text-neutral-400">One bounded flow connects human custody, an agent-friendly API, intelligent policy review, and settlement.</p>
         </div>
-        <div className="mt-8 border-y border-outline bg-surface-low/40">
-          <TreasuryFlowAnimation />
+        <div className="mt-10 border-y border-outline bg-surface-low/40 px-2 py-5 sm:px-6 sm:py-8">
+          <TreasuryPaymentFlow />
         </div>
-      </section>
+      </Reveal>
 
-      <section className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
+      <Reveal className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
         <div className="lg:col-span-4">
           <p className="font-mono text-xs text-success">HOW IT WORKS</p>
           <h2 className="mt-3 text-3xl font-semibold">Plain HTTP in. Policy-controlled payment out.</h2>
         </div>
         <div className="grid gap-px border border-outline bg-outline lg:col-span-8 sm:grid-cols-2">
           {lifecycle.map(([number, title, detail]) => (
-            <div key={number} className="min-h-52 bg-black p-6">
+            <div key={number} className="min-h-52 bg-black p-6 transition-colors duration-200 hover:bg-surface-low">
               <div className="font-mono text-xs text-neutral-600">{number} / {title}</div>
               <p className="mt-8 text-sm leading-7 text-neutral-300">{detail}</p>
             </div>
           ))}
         </div>
-      </section>
+      </Reveal>
 
-      <section className="border-b border-outline py-20">
+      <Reveal className="border-b border-outline py-20">
         <div className="grid gap-8 lg:grid-cols-12">
           <div className="lg:col-span-5">
             <p className="font-mono text-xs text-signal">DEVELOPER EXPERIENCE</p>
             <h2 className="mt-3 text-3xl font-semibold">Agents integrate with JSON, not wallet infrastructure.</h2>
             <p className="mt-4 max-w-xl leading-7 text-neutral-400">The platform handles GenLayer submission, policy binding, finality, execution, and audit history behind a stable HTTP interface.</p>
-            <Link href="/agent" className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-purple">Explore the Agent API <ArrowRight size={16} /></Link>
+            <PublicTransitionLink href="/agent" className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-purple">Explore the Agent API <ArrowRight size={16} /></PublicTransitionLink>
           </div>
           <div className="terminal overflow-hidden lg:col-span-7">
             <div className="flex items-center gap-2 border-b border-outline px-4 py-3 text-xs text-neutral-500"><Braces size={14} /> POST /api/v1/spend</div>
@@ -93,25 +98,25 @@ export default function Home() {
 }`}</pre>
           </div>
         </div>
-      </section>
+      </Reveal>
 
-      <section className="border-b border-outline py-20">
+      <Reveal className="border-b border-outline py-20">
         <div className="max-w-3xl">
           <p className="font-mono text-xs text-purple">TRUST BOUNDARY</p>
           <h2 className="mt-3 text-3xl font-semibold">Useful autonomy without unrestricted custody.</h2>
         </div>
         <div className="mt-10 grid gap-px border border-outline bg-outline md:grid-cols-3">
           {safeguards.map((item) => (
-            <div key={item.title} className="min-h-64 bg-black p-6">
+            <div key={item.title} className="min-h-64 bg-black p-6 transition-colors duration-200 hover:bg-surface-low">
               <item.icon size={22} className="text-purple" />
               <h3 className="mt-10 text-lg font-semibold">{item.title}</h3>
               <p className="mt-3 text-sm leading-7 text-neutral-400">{item.detail}</p>
             </div>
           ))}
         </div>
-      </section>
+      </Reveal>
 
-      <section className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
+      <Reveal className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
         <div className="lg:col-span-6">
           <FileCheck2 size={24} className="text-success" />
           <h2 className="mt-5 text-3xl font-semibold">Every decision leaves a trail.</h2>
@@ -124,18 +129,17 @@ export default function Home() {
             </div>
           ))}
         </div>
-      </section>
+      </Reveal>
 
-      <section className="relative overflow-hidden py-24 text-center">
+      <Reveal className="py-24 text-center">
         <WalletCards className="mx-auto text-purple" size={30} />
         <h2 className="mx-auto mt-5 max-w-3xl text-4xl font-semibold">Give your agents a budget, not your treasury.</h2>
         <p className="mx-auto mt-4 max-w-2xl leading-7 text-neutral-400">Connect an owner wallet, grant bounded spending permission, define the policy, and issue an agent API key.</p>
         <div className="mt-8 flex justify-center gap-3">
           <SetupAccessLink href="/setup" className="inline-flex items-center gap-2 rounded-md bg-purple px-5 py-3 text-sm font-bold text-black">Start setup <ArrowRight size={17} /></SetupAccessLink>
-          <Link href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline px-5 py-3 text-sm font-semibold">Read the docs</Link>
+          <PublicTransitionLink href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline px-5 py-3 text-sm font-semibold">Read the docs</PublicTransitionLink>
         </div>
-        <LockKeyhole className="pointer-events-none absolute -bottom-14 left-1/2 h-64 w-64 -translate-x-1/2 text-neutral-950" strokeWidth={0.5} aria-hidden="true" />
-      </section>
+      </Reveal>
     </Shell>
   );
 }

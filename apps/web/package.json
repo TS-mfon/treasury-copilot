@@ -17,7 +17,6 @@
     "@tanstack/react-query": "^5.62.7",
     "@treasury-copilot/shared": "0.1.0",
     "genlayer-js": "^1.1.8",
-    "lottie-react": "^2.4.1",
     "lucide-react": "^0.468.0",
     "next": "^15.1.3",
     "react": "^19.0.0",

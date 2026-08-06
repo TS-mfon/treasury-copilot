@@ -7,6 +7,7 @@ import { AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldChe
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
 import { useOwnerSession } from "@/components/OwnerSessionProvider";
+import { PublicTransitionLink } from "@/components/PublicTransitionLink";
 
 const publicNav = [
   { href: "/setup", label: "Setup", icon: ShieldCheck },
@@ -49,7 +50,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <nav className="flex items-center gap-1">
               {nav.map((item) => {
                 const active = pathname === item.href;
-                const NavLink = item.href === "/setup" ? SetupAccessLink : Link;
+                const NavLink = item.href === "/setup"
+                  ? SetupAccessLink
+                  : ["/agent", "/docs"].includes(item.href) ? PublicTransitionLink : Link;
                 return (
                   <NavLink
                     key={item.href}
@@ -84,33 +87,37 @@ export function Shell({ children }: { children: React.ReactNode }) {
         {open && (
           <div className="border-t border-outline bg-surface-low px-4 py-3 lg:hidden">
             <nav className="grid gap-1">
-              {nav.map((item) => (
-                item.href === "/setup" ? (
-                <SetupAccessLink
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
-                    pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
-                  }`}
-                  onClick={() => setOpen(false)}
-                >
-                  <item.icon size={17} />
-                  {item.label}
-                </SetupAccessLink>
-                ) : (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
-                    pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
-                  }`}
-                  onClick={() => setOpen(false)}
-                >
-                  <item.icon size={17} />
-                  {item.label}
-                </Link>
-                )
-              ))}
+              {nav.map((item) => {
+                if (item.href === "/setup") {
+                  return (
+                    <SetupAccessLink
+                      key={item.href}
+                      href={item.href}
+                      className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
+                        pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
+                      }`}
+                      onClick={() => setOpen(false)}
+                    >
+                      <item.icon size={17} />
+                      {item.label}
+                    </SetupAccessLink>
+                  );
+                }
+                const NavLink = ["/agent", "/docs"].includes(item.href) ? PublicTransitionLink : Link;
+                return (
+                  <NavLink
+                    key={item.href}
+                    href={item.href}
+                    className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
+                      pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
+                    }`}
+                    onClick={() => setOpen(false)}
+                  >
+                    <item.icon size={17} />
+                    {item.label}
+                  </NavLink>
+                );
+              })}
             </nav>
             <div className="mt-3 border-t border-outline pt-3">
               <OwnerAuthButton />
