@@ -1,23 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { LogIn, LogOut, Wallet } from "lucide-react";
 import { useAccount, useConnect, useSignMessage } from "wagmi";
+import { useOwnerSession } from "@/components/OwnerSessionProvider";
 
 export function OwnerAuthButton() {
   const { address, isConnected } = useAccount();
   const { connect, connectors, isPending } = useConnect();
   const { signMessageAsync } = useSignMessage();
-  const [authenticated, setAuthenticated] = useState(false);
+  const { authenticated, refreshSession } = useOwnerSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    void fetch("/api/auth/session")
-      .then((response) => response.ok ? response.json() : { authenticated: false })
-      .then((result) => setAuthenticated(Boolean(result.authenticated)))
-      .catch(() => setAuthenticated(false));
-  }, []);
 
   async function login() {
     if (!address) return;
@@ -31,7 +25,7 @@ export function OwnerAuthButton() {
       const response = await fetch("/api/auth/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner: address, nonce: challenge.nonce, message: challenge.message, signature }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Could not authenticate wallet");
-      setAuthenticated(true);
+      await refreshSession();
       window.location.assign("/dashboard");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Wallet authentication failed");
@@ -42,7 +36,7 @@ export function OwnerAuthButton() {
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    setAuthenticated(false);
+    await refreshSession();
     window.location.assign("/");
   }
 

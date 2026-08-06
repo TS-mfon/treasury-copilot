@@ -6,6 +6,7 @@ import { injected } from "wagmi/connectors";
 import { arbitrumSepolia, base, baseSepolia } from "wagmi/chains";
 import { useState } from "react";
 import { xLayer, xLayerTestnet } from "@treasury-copilot/shared";
+import { OwnerSessionProvider } from "@/components/OwnerSessionProvider";
 
 const config = createConfig({
   chains: [baseSepolia, base, arbitrumSepolia, xLayer, xLayerTestnet],
@@ -29,7 +30,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
   return (
     <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <OwnerSessionProvider>{children}</OwnerSessionProvider>
+      </QueryClientProvider>
     </WagmiProvider>
   );
 }

@@ -16,6 +16,7 @@ import { parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
 import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
+import { SetupProgressModal } from "@/components/SetupProgressModal";
 
 type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base">;
 
@@ -227,6 +228,7 @@ export default function SetupPage() {
 
   return (
     <ProtectedOwnerPage><Shell>
+      <SetupProgressModal open={isRegistering} status={status} />
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold text-ink">Setup</h1>

@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, X } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
+import { SetupAccessLink } from "@/components/SetupAccessLink";
+import { useOwnerSession } from "@/components/OwnerSessionProvider";
 
 const publicNav = [
   { href: "/setup", label: "Setup", icon: ShieldCheck },
@@ -24,15 +26,8 @@ export function LogoMark({ size = 38 }: { size?: number }) {
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [authenticated, setAuthenticated] = useState(false);
+  const { authenticated, dismissUnlockNotice, unlockNoticeVisible } = useOwnerSession();
   const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    void fetch("/api/auth/session")
-      .then(async (response) => response.ok ? response.json() : { authenticated: false })
-      .then((result) => setAuthenticated(Boolean(result.authenticated)))
-      .catch(() => setAuthenticated(false));
-  }, [pathname]);
 
   const nav = authenticated
     ? [publicNav[0], ...ownerNav, ...publicNav.slice(1)]
@@ -54,8 +49,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <nav className="flex items-center gap-1">
               {nav.map((item) => {
                 const active = pathname === item.href;
+                const NavLink = item.href === "/setup" ? SetupAccessLink : Link;
                 return (
-                  <Link
+                  <NavLink
                     key={item.href}
                     href={item.href}
                     className={`flex h-10 items-center gap-2 border-b-2 px-3 text-sm font-medium transition ${
@@ -66,7 +62,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   >
                     <item.icon size={15} />
                     {item.label}
-                  </Link>
+                  </NavLink>
                 );
               })}
             </nav>
@@ -89,6 +85,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className="border-t border-outline bg-surface-low px-4 py-3 lg:hidden">
             <nav className="grid gap-1">
               {nav.map((item) => (
+                item.href === "/setup" ? (
+                <SetupAccessLink
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm ${
+                    pathname === item.href ? "bg-surface-high text-purple" : "text-neutral-300"
+                  }`}
+                  onClick={() => setOpen(false)}
+                >
+                  <item.icon size={17} />
+                  {item.label}
+                </SetupAccessLink>
+                ) : (
                 <Link
                   key={item.href}
                   href={item.href}
@@ -100,10 +109,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <item.icon size={17} />
                   {item.label}
                 </Link>
+                )
               ))}
             </nav>
             <div className="mt-3 border-t border-outline pt-3">
               <OwnerAuthButton />
+            </div>
+          </div>
+        )}
+        {unlockNoticeVisible && (
+          <div className="border-t border-warning/30 bg-warning/10" role="alert">
+            <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 text-sm text-warning sm:px-6 lg:px-8">
+              <AlertTriangle size={17} className="shrink-0" />
+              <p className="flex-1">Please unlock Treasury Copilot by clicking the Unlock button and signing with your wallet.</p>
+              <button type="button" className="icon-button h-8 w-8" aria-label="Dismiss unlock notice" onClick={dismissUnlockNotice}>
+                <X size={15} />
+              </button>
             </div>
           </div>
         )}
