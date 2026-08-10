@@ -1,5 +1,5 @@
 const apiBase = process.env.TREASURY_API_BASE
-  ?? "https://treasury-copilot-genjury.vercel.app/api/v1";
+  ?? "https://treasurycopilot.app/api/v1";
 const apiKey = process.env.TREASURY_API_KEY!;
 const agentAddress = process.env.AGENT_ADDRESS!;
 

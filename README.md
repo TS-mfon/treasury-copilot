@@ -30,12 +30,12 @@ payments.
 The result is similar to giving an employee a company card with strict limits
 instead of giving them the company's bank credentials.
 
-- Live application: [treasury-copilot-genjury.vercel.app](https://treasury-copilot-genjury.vercel.app)
+- Live application: [treasurycopilot.app](https://treasurycopilot.app)
 - Agent documentation: [docs/api.md](docs/api.md)
 - OpenAPI 3.1: [apps/web/public/openapi.json](apps/web/public/openapi.json)
 - Postman collection: [docs/treasury-copilot.postman_collection.json](docs/treasury-copilot.postman_collection.json)
 - Deployment guide: [docs/deployment.md](docs/deployment.md)
-- In-app documentation: [treasury-copilot-genjury.vercel.app/docs](https://treasury-copilot-genjury.vercel.app/docs)
+- In-app documentation: [treasurycopilot.app/docs](https://treasurycopilot.app/docs)
 
 ## Contents
 
@@ -585,7 +585,7 @@ the server verifies the stored values.
 The API base URL is:
 
 ```text
-https://treasury-copilot-genjury.vercel.app/api/v1
+https://treasurycopilot.app/api/v1
 ```
 
 Authenticate with:
@@ -928,7 +928,7 @@ The current production deployment uses:
 
 | Component | Value |
 | --- | --- |
-| Application | `https://treasury-copilot-genjury.vercel.app` |
+| Application | `https://treasurycopilot.app` |
 | GenLayer registry | `0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9` |
 | Active GenLayer policy V4 | `0xBF9Aa94fD73a883Be48B381b41eB7619181BD9fA` |
 | Platform signer and registry gateway | `0x1072e78B72840BbC921493ea1C97dC5CAA54598F` |
@@ -1056,7 +1056,7 @@ precision. For USDC, use no more than six decimal places.
 
 - [Agent API reference](docs/api.md)
 - [Deployment and operations](docs/deployment.md)
-- [In-app documentation](https://treasury-copilot-genjury.vercel.app/docs)
+- [In-app documentation](https://treasurycopilot.app/docs)
 - [GenLayer documentation](https://docs.genlayer.com/)
 - [MetaMask Smart Accounts Kit](https://docs.metamask.io/smart-accounts-kit/)
 - [1Shot documentation](https://1shotapi.com/docs)

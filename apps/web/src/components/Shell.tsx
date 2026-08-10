@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
@@ -29,6 +29,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { authenticated, dismissUnlockNotice, unlockNoticeVisible } = useOwnerSession();
   const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 18);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const nav = authenticated
     ? [publicNav[0], ...ownerNav, ...publicNav.slice(1)]
@@ -36,7 +44,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-paper text-ink">
-      <header className="sticky top-0 z-30 border-b border-outline bg-paper/95 backdrop-blur">
+      <header className={`site-header sticky top-0 z-30 ${scrolled || pathname !== "/" ? "site-header-scrolled" : "site-header-hero"}`}>
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex min-w-0 items-center gap-3" onClick={() => setOpen(false)}>
             <LogoMark />

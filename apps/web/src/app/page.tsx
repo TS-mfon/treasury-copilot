@@ -1,9 +1,10 @@
-import { ArrowRight, Braces, CheckCircle2, Code2, FileCheck2, KeyRound, RotateCcw, ShieldCheck, WalletCards } from "lucide-react";
+import { ArrowDownRight, ArrowRight, Braces, CheckCircle2, FileCheck2, KeyRound, RotateCcw, ShieldCheck, WalletCards } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
 import { PublicTransitionLink } from "@/components/PublicTransitionLink";
 import { Reveal } from "@/components/Reveal";
 import { TreasuryPaymentFlow } from "@/components/TreasuryPaymentFlow";
+import { InteractiveHero, HeroMiniProof } from "@/components/InteractiveHero";
 
 const safeguards = [
   { icon: KeyRound, title: "No agent private keys", detail: "Agents authenticate through scoped API keys that identify them but never sign blockchain transactions." },
@@ -12,133 +13,124 @@ const safeguards = [
 ];
 
 const lifecycle = [
-  ["01", "REQUEST", "The agent submits recipient, exact amount, category, justification, and optional evidence through HTTP."],
-  ["02", "VERIFY", "Treasury Copilot matches the API key to the owner, agent, policy, chain, token, and delegated funding account."],
-  ["03", "REVIEW", "GenLayer determines whether the request satisfies the owner’s natural-language policy and evidence requirements."],
-  ["04", "EXECUTE", "1Shot executes only a finalized approval, and the transaction hash is written back to the on-chain history."],
+  ["01", "REGISTER", "Owner permission, agent identity, policy limits, and a scoped API credential."],
+  ["02", "REQUEST", "The agent submits recipient, amount, category, justification, and optional evidence through HTTP."],
+  ["03", "REVIEW", "GenLayer determines whether the request satisfies the owner's policy and evidence requirements."],
+  ["04", "RECEIPT", "Approved execution and the final transaction hash remain available in the audit trail."],
 ];
 
 export default function Home() {
   return (
     <Shell>
-      <section className="border-b border-outline py-20 sm:py-28">
-        <div className="max-w-4xl">
-          <div className="badge text-success">
-            <span className="mr-2 h-1.5 w-1.5 rounded-full bg-success" />
-            GENLAYER POLICY ENGINE ONLINE
-          </div>
-          <h1 className="mt-7 text-5xl font-bold leading-[1.04] text-ink sm:text-7xl lg:text-8xl">Treasury Copilot</h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-neutral-300 sm:text-xl">
-            The financial control plane for autonomous agents. Give agents useful USDC spending power without giving them unrestricted custody.
-          </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <SetupAccessLink href="/setup" className="inline-flex items-center gap-2 rounded-md bg-purple px-5 py-3 text-sm font-bold text-black transition hover:bg-violet-300">
-              Configure an agent <ArrowRight size={17} />
-            </SetupAccessLink>
-            <PublicTransitionLink href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline bg-surface-low px-5 py-3 text-sm font-semibold text-ink transition hover:bg-surface-high">
-              <Code2 size={17} /> API reference
-            </PublicTransitionLink>
-          </div>
-          <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[11px] text-neutral-500">
-            <span>BASE SEPOLIA USDC</span>
-            <span>GENLAYER STUDIONET</span>
-            <span>METAMASK ERC-7715</span>
-          </div>
+      <InteractiveHero />
+
+      <section className="story-intro" aria-labelledby="story-title">
+        <div>
+          <p className="eyebrow purple-text">THE GAP</p>
+          <h2 id="story-title">Agents can reason. Their spending authority is still unsafe.</h2>
         </div>
-        <div className="mt-16 grid grid-cols-2 border-y border-outline font-mono text-[10px] text-neutral-500 sm:grid-cols-4">
-          {["OWNER CUSTODY", "AGENT HTTP API", "GENLAYER REVIEW", "1SHOT SETTLEMENT"].map((label, index) => (
-            <div key={label} className="border-b border-outline px-4 py-4 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0">
-              <span className="mr-2 text-purple">0{index + 1}</span>{label}
-            </div>
-          ))}
+        <div className="story-intro-copy">
+          <p>Useful agents will need to buy APIs, data, compute, software, and services. A funded private key creates unrestricted exposure. Manual approval for every small payment removes the point of autonomy.</p>
+          <p className="muted-copy">Treasury Copilot puts a policy boundary between agent intent and irreversible execution.</p>
+          <HeroMiniProof />
         </div>
       </section>
 
-      <Reveal id="payment-journey" className="scroll-mt-20 border-b border-outline py-20 sm:py-24">
-        <div className="max-w-3xl">
-          <p className="font-mono text-xs text-purple">THE PAYMENT JOURNEY</p>
-          <h2 className="mt-3 text-3xl font-semibold sm:text-4xl">From agent intent to auditable execution.</h2>
-          <p className="mt-4 text-base leading-7 text-neutral-400">One bounded flow connects human custody, an agent-friendly API, intelligent policy review, and settlement.</p>
+      <Reveal id="payment-journey" className="story-section scroll-mt-20">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow purple-text">THE PAYMENT JOURNEY</p>
+            <h2>One request. Four control states.</h2>
+          </div>
+          <p>From owner delegation to an auditable settlement, every step is explicit.</p>
         </div>
-        <div className="mt-10 border-y border-outline bg-surface-low/40 px-2 py-5 sm:px-6 sm:py-8">
-          <TreasuryPaymentFlow />
-        </div>
+        <div className="journey-frame"><TreasuryPaymentFlow /></div>
       </Reveal>
 
-      <Reveal className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
-        <div className="lg:col-span-4">
-          <p className="font-mono text-xs text-success">HOW IT WORKS</p>
-          <h2 className="mt-3 text-3xl font-semibold">Plain HTTP in. Policy-controlled payment out.</h2>
-        </div>
-        <div className="grid gap-px border border-outline bg-outline lg:col-span-8 sm:grid-cols-2">
+      <Reveal className="story-section lifecycle-section">
+        <div className="lifecycle-grid">
           {lifecycle.map(([number, title, detail]) => (
-            <div key={number} className="min-h-52 bg-black p-6 transition-colors duration-200 hover:bg-surface-low">
-              <div className="font-mono text-xs text-neutral-600">{number} / {title}</div>
-              <p className="mt-8 text-sm leading-7 text-neutral-300">{detail}</p>
+            <div className="lifecycle-item" key={number}>
+              <span>{number}</span>
+              <strong>{title}</strong>
+              <p>{detail}</p>
             </div>
           ))}
         </div>
       </Reveal>
 
-      <Reveal className="border-b border-outline py-20">
-        <div className="grid gap-8 lg:grid-cols-12">
-          <div className="lg:col-span-5">
-            <p className="font-mono text-xs text-signal">DEVELOPER EXPERIENCE</p>
-            <h2 className="mt-3 text-3xl font-semibold">Agents integrate with JSON, not wallet infrastructure.</h2>
-            <p className="mt-4 max-w-xl leading-7 text-neutral-400">The platform handles GenLayer submission, policy binding, finality, execution, and audit history behind a stable HTTP interface.</p>
-            <PublicTransitionLink href="/agent" className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-purple">Explore the Agent API <ArrowRight size={16} /></PublicTransitionLink>
-          </div>
-          <div className="terminal overflow-hidden lg:col-span-7">
-            <div className="flex items-center gap-2 border-b border-outline px-4 py-3 text-xs text-neutral-500"><Braces size={14} /> POST /api/v1/spend</div>
-            <pre className="overflow-x-auto p-5 text-xs leading-6 text-neutral-300">{`{
-  "recipient": "0xMerchant...",
+      <Reveal className="story-section story-section-split">
+        <div className="section-heading-column">
+          <p className="eyebrow green-text">REGISTER THE AGENT</p>
+          <h2>Define authority before the first request arrives.</h2>
+          <p className="muted-copy">The owner connects a wallet, grants bounded USDC permission, binds one agent to one policy, and receives a scoped `tcp_` credential.</p>
+          <SetupAccessLink href="/setup" className="text-link">Open owner setup <ArrowRight size={16} /></SetupAccessLink>
+        </div>
+        <div className="registration-visual" aria-label="Agent registration stages">
+          {["OWNER PERMISSION", "AGENT IDENTITY", "POLICY LIMITS", "SCOPED API KEY"].map((item, index) => (
+            <div className="registration-step" key={item}>
+              <span>0{index + 1}</span><strong>{item}</strong><i />
+            </div>
+          ))}
+        </div>
+      </Reveal>
+
+      <Reveal className="story-section story-section-split developer-story">
+        <div className="section-heading-column">
+          <p className="eyebrow amber-text">DEVELOPER EXPERIENCE</p>
+          <h2>Agents integrate with JSON, not wallet infrastructure.</h2>
+          <p className="muted-copy">The platform handles GenLayer submission, policy binding, finality, execution, and audit history behind a stable HTTP interface.</p>
+          <PublicTransitionLink href="/agent" className="text-link">Explore the Agent API <ArrowRight size={16} /></PublicTransitionLink>
+        </div>
+        <div className="developer-console terminal">
+          <div className="console-bar"><Braces size={14} /> POST /api/v1/spend <span>tcp_live_••••</span></div>
+          <pre>{`{
+  "agent_address": "0xRegisteredAgent...",
+  "recipient": "0xApprovedMerchant...",
   "amount": "12.50",
   "category": "infrastructure",
-  "justification": "Monthly deployment service"
+  "justification": "Monthly deployment service",
+  "idempotency_key": "deploy-2026-08"
 }`}</pre>
-          </div>
+          <div className="console-result"><span className="result-dot" /> request submitted <span className="console-result-id">request_id: 0x••••</span></div>
         </div>
       </Reveal>
 
-      <Reveal className="border-b border-outline py-20">
-        <div className="max-w-3xl">
-          <p className="font-mono text-xs text-purple">TRUST BOUNDARY</p>
-          <h2 className="mt-3 text-3xl font-semibold">Useful autonomy without unrestricted custody.</h2>
+      <Reveal className="story-section">
+        <div className="section-heading-row">
+          <div><p className="eyebrow red-text">THE TRUST BOUNDARY</p><h2>Useful autonomy without unrestricted custody.</h2></div>
+          <p>The agent can ask. The policy decides. The owner can stop it.</p>
         </div>
-        <div className="mt-10 grid gap-px border border-outline bg-outline md:grid-cols-3">
+        <div className="safeguard-grid">
           {safeguards.map((item) => (
-            <div key={item.title} className="min-h-64 bg-black p-6 transition-colors duration-200 hover:bg-surface-low">
-              <item.icon size={22} className="text-purple" />
-              <h3 className="mt-10 text-lg font-semibold">{item.title}</h3>
-              <p className="mt-3 text-sm leading-7 text-neutral-400">{item.detail}</p>
+            <div key={item.title} className="safeguard-item">
+              <item.icon size={21} className="purple-text" />
+              <h3>{item.title}</h3>
+              <p>{item.detail}</p>
             </div>
           ))}
         </div>
       </Reveal>
 
-      <Reveal className="grid gap-10 border-b border-outline py-20 lg:grid-cols-12">
-        <div className="lg:col-span-6">
-          <FileCheck2 size={24} className="text-success" />
-          <h2 className="mt-5 text-3xl font-semibold">Every decision leaves a trail.</h2>
-          <p className="mt-4 max-w-xl leading-7 text-neutral-400">Request identity, policy version, verdict reasoning, execution state, and the final Base transaction hash remain available for review.</p>
-        </div>
-        <div className="grid gap-4 font-mono text-xs lg:col-span-6">
-          {["REQUEST ACCEPTED", "GENLAYER REVIEW FINALIZED", "POLICY APPROVED", "1SHOT EXECUTION CONFIRMED", "BASE TX HASH RECORDED"].map((item, index) => (
-            <div key={item} className="flex items-center gap-3 border-b border-outline pb-3 text-neutral-400">
-              <CheckCircle2 size={15} className={index === 4 ? "text-success" : "text-purple"} /> {item}
-            </div>
-          ))}
+      <Reveal className="story-section story-section-split audit-story">
+        <div className="audit-copy"><FileCheck2 size={24} className="green-text" /><p className="eyebrow green-text">THE AUDIT TRAIL</p><h2>Every decision leaves evidence.</h2><p className="muted-copy">Request identity, policy version, verdict reasoning, execution state, and the final transaction hash remain available for review.</p></div>
+        <div className="audit-list">
+          {["REQUEST ACCEPTED", "GENLAYER REVIEW FINALIZED", "POLICY APPROVED", "EXECUTION CONFIRMED", "TX HASH RECORDED"].map((item, index) => <div key={item}><CheckCircle2 size={15} className={index === 4 ? "green-text" : "purple-text"} /><span>{item}</span><small>0{index + 1}</small></div>)}
         </div>
       </Reveal>
 
-      <Reveal className="py-24 text-center">
-        <WalletCards className="mx-auto text-purple" size={30} />
-        <h2 className="mx-auto mt-5 max-w-3xl text-4xl font-semibold">Give your agents a budget, not your treasury.</h2>
-        <p className="mx-auto mt-4 max-w-2xl leading-7 text-neutral-400">Connect an owner wallet, grant bounded spending permission, define the policy, and issue an agent API key.</p>
-        <div className="mt-8 flex justify-center gap-3">
-          <SetupAccessLink href="/setup" className="inline-flex items-center gap-2 rounded-md bg-purple px-5 py-3 text-sm font-bold text-black">Start setup <ArrowRight size={17} /></SetupAccessLink>
-          <PublicTransitionLink href="/docs" className="inline-flex items-center gap-2 rounded-md border border-outline px-5 py-3 text-sm font-semibold">Read the docs</PublicTransitionLink>
-        </div>
+      <Reveal className="future-band">
+        <div className="future-band-mark"><ArrowDownRight size={21} /></div>
+        <p className="eyebrow purple-text">THE NEXT CONTROL PLANE</p>
+        <h2>As agents become economically active, policy becomes infrastructure.</h2>
+        <p className="muted-copy">Wallets handle custody. Payment networks handle settlement. Treasury Copilot governs why an agent is allowed to spend and records what happened.</p>
+      </Reveal>
+
+      <Reveal className="final-cta">
+        <WalletCards className="purple-text" size={29} />
+        <h2>Give your agents a budget, not your treasury.</h2>
+        <p>Connect an owner wallet, grant bounded spending permission, define the policy, and issue an agent API key.</p>
+        <div className="hero-actions final-actions"><SetupAccessLink href="/setup" className="hero-primary"><span>Start setup</span><ArrowRight size={16} /></SetupAccessLink><PublicTransitionLink href="/docs" className="hero-secondary"><span>Read the docs</span></PublicTransitionLink></div>
       </Reveal>
     </Shell>
   );

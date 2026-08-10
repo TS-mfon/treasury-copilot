@@ -4,7 +4,7 @@ import requests
 
 API_BASE = os.getenv(
     "TREASURY_API_BASE",
-    "https://treasury-copilot-genjury.vercel.app/api/v1",
+    "https://treasurycopilot.app/api/v1",
 )
 API_KEY = os.environ["TREASURY_API_KEY"]
 AGENT_ADDRESS = os.environ["AGENT_ADDRESS"]

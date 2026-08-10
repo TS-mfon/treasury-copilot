@@ -3,7 +3,7 @@
 ## Scope
 
 This audit exercised the production HTTP API at
-`https://treasury-copilot-genjury.vercel.app/api/v1` against Base Sepolia and
+`https://treasurycopilot.app/api/v1` against Base Sepolia and
 GenLayer StudioNet.
 
 The bearer credential is intentionally omitted. It was bound to:

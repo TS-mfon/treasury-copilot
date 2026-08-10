@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://treasury-copilot-genjury.vercel.app/api/v1",
+      "url": "https://treasurycopilot.app/api/v1",
       "description": "Base Sepolia testnet"
     }
   ],

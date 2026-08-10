@@ -20,7 +20,7 @@ You need two values from the human owner:
 ```bash
 export TREASURY_API_KEY="tcp_..."
 export AGENT_ADDRESS="0xYourRegisteredAgentAddress"
-export TREASURY_API_BASE="https://treasury-copilot-genjury.vercel.app/api/v1"
+export TREASURY_API_BASE="https://treasurycopilot.app/api/v1"
 ```
 
 The key is bound to exactly one owner, agent, GenLayer policy, delegated
@@ -58,7 +58,7 @@ same key. Never create a new idempotency key for the same intended payment.
 ## 1. Connection
 
 ```text
-https://treasury-copilot-genjury.vercel.app/api/v1
+https://treasurycopilot.app/api/v1
 ```
 
 All requests use:

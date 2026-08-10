@@ -7,7 +7,7 @@
   "variable": [
     {
       "key": "api_base",
-      "value": "https://treasury-copilot-genjury.vercel.app/api/v1"
+      "value": "https://treasurycopilot.app/api/v1"
     },
     {
       "key": "api_key",
