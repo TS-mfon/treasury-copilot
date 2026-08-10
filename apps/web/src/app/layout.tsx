@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "Treasury Copilot",
-    description: "Policy-controlled payment infrastructure for autonomous AI agents.",
+    description: "Policy controlled payment infrastructure for autonomous AI agents.",
     url: "https://treasurycopilot.app",
     siteName: "Treasury Copilot",
     type: "website",

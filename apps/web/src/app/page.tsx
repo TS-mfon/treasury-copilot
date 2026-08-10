@@ -8,8 +8,8 @@ import { InteractiveHero, HeroMiniProof } from "@/components/InteractiveHero";
 
 const safeguards = [
   { icon: KeyRound, title: "No agent private keys", detail: "Agents authenticate through scoped API keys that identify them but never sign blockchain transactions." },
-  { icon: ShieldCheck, title: "Every request reviewed", detail: "Deterministic checks and GenLayer prompt-comparative review evaluate every valid payment request." },
-  { icon: RotateCcw, title: "Owner-controlled revocation", detail: "Owners retain custody, policy control, API-key rotation, and the ability to stop future execution." },
+  { icon: ShieldCheck, title: "Every request reviewed", detail: "Deterministic checks and GenLayer prompt comparative review evaluate every valid payment request." },
+  { icon: RotateCcw, title: "Owner controlled revocation", detail: "Owners retain custody, policy control, API key rotation, and the ability to stop future execution." },
 ];
 
 const lifecycle = [

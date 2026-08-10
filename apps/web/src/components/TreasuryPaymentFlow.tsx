@@ -12,7 +12,7 @@ const phaseNames = [
   "GenLayer comparative review",
   "1Shot execution",
   "Base settlement",
-  "On-chain audit trail",
+  "Onchain audit trail",
 ];
 
 const colors = {
@@ -175,7 +175,7 @@ function AuditPanel({ phase, viewport }: { phase: number; viewport: Viewport }) 
   return (
     <g opacity={visible ? 1 : .48} transform={`translate(${x} ${y})`}>
       <rect x={viewport === "desktop" ? -245 : -160} y="-28" width={viewport === "desktop" ? 490 : 320} height="56" rx="8" fill={colors.surface} stroke={visible ? colors.green : colors.outline} />
-      <text x="0" y="-5" fill={visible ? colors.green : colors.muted} fontSize="10" fontFamily="ui-monospace, monospace" textAnchor="middle">ON-CHAIN AUDIT TRAIL UPDATED</text>
+      <text x="0" y="-5" fill={visible ? colors.green : colors.muted} fontSize="10" fontFamily="ui-monospace, monospace" textAnchor="middle">ONCHAIN AUDIT TRAIL UPDATED</text>
       <text x="0" y="15" fill={colors.muted} fontSize="9" fontFamily="ui-monospace, monospace" textAnchor="middle">request · verdict · execution · tx hash</text>
     </g>
   );

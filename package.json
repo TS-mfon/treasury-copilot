@@ -17,6 +17,8 @@
   },
   "devDependencies": {
     "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1"
   }
 }
-

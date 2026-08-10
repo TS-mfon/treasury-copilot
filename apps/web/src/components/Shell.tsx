@@ -50,7 +50,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <LogoMark />
             <span className="min-w-0">
               <span className="block truncate text-sm font-semibold">Treasury Copilot</span>
-              <span className="block truncate text-[11px] text-neutral-500">Policy-gated execution</span>
+              <span className="block truncate text-[11px] text-neutral-500">Policy gated execution</span>
             </span>
           </Link>
 

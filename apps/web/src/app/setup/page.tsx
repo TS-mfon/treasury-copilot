@@ -55,7 +55,7 @@ export default function SetupPage() {
   const [weeklyCap, setWeeklyCap] = useState("100");
   const [perTxCap, setPerTxCap] = useState("25");
   const [whitelist, setWhitelist] = useState("");
-  const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business-related.");
+  const [policyText, setPolicyText] = useState("Routine API bills, contributor reimbursements, software subscriptions, and grants are allowed when the justification is specific and business related.");
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
   const [status, setStatus] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -344,12 +344,12 @@ export default function SetupPage() {
           <h2 className="text-lg font-semibold">3. GenLayer policy</h2>
           <div className="mt-4 grid gap-4">
             <label className="grid gap-2 text-sm font-medium">
-              Per-request cap {tokenSymbol}
+              Per request cap {tokenSymbol}
               <input className="field" value={perTxCap} onChange={(event) => setPerTxCap(event.target.value)} />
             </label>
           </div>
           <p className="mt-3 text-xs leading-5 text-neutral-500">
-            Every valid request receives GenLayer prompt-comparative review. Treasury Copilot has no fast-approval bypass.
+            Every valid request receives GenLayer prompt comparative review. Treasury Copilot has no fast approval bypass.
           </p>
           <label className="mt-4 grid gap-2 text-sm font-medium">
             Optional recipient whitelist
@@ -360,7 +360,7 @@ export default function SetupPage() {
             <textarea className="field min-h-32" value={policyText} onChange={(event) => setPolicyText(event.target.value)} />
           </label>
           <p className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
-            Merchant-specific policies need an exact recipient in the whitelist or independently verified invoice evidence. Treasury Copilot denies unsupported merchant claims instead of guessing who controls a wallet.
+            Merchant specific policies need an exact recipient in the whitelist or independently verified invoice evidence. Treasury Copilot denies unsupported merchant claims instead of guessing who controls a wallet.
           </p>
 
           <button

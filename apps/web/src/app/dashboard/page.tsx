@@ -110,7 +110,7 @@ export default function DashboardPage() {
           <div>
             <div className="badge text-purple">OWNER CONSOLE</div>
             <h1 className="mt-3 text-3xl font-semibold">Agent treasuries</h1>
-            <p className="mt-2 text-neutral-400">Each agent has an isolated policy, API-key version, and delegated funding binding.</p>
+            <p className="mt-2 text-neutral-400">Each agent has an isolated policy, API key version, and delegated funding binding.</p>
           </div>
           <Link href="/setup" className="inline-flex items-center gap-2 rounded-md bg-purple px-4 py-2 text-sm font-bold text-black">
             <Plus size={16} /> Add agent

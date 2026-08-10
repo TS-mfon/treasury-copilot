@@ -18,7 +18,7 @@ function activeStage(status: string) {
   return 2;
 }
 
-const stages = ["Owner authorization", "Policy deployment", "Delegation registration", "API-key issuance"];
+const stages = ["Owner authorization", "Policy deployment", "Delegation registration", "API key issuance"];
 
 export function SetupProgressModal({ open, status }: { open: boolean; status: string }) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
