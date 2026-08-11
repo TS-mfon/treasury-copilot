@@ -13,6 +13,10 @@ export const metadata: Metadata = {
     template: "%s | Treasury Copilot",
   },
   description: "The financial control plane for autonomous agents. Give agents a budget, not your private keys.",
+  other: {
+    "base:app_id": "69f271446d94c65125c04540",
+    "ory-verify": "orynth-14ccbda6605f49dc867b4ea791f6f444",
+   },
   alternates: {
     canonical: "/",
   },
