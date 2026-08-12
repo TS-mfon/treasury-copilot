@@ -16,6 +16,7 @@
     "@metamask/smart-accounts-kit": "^1.6.0",
     "@tanstack/react-query": "^5.62.7",
     "@treasury-copilot/shared": "0.1.0",
+    "@vercel/analytics": "^2.0.1",
     "genlayer-js": "^1.1.8",
     "lucide-react": "^0.468.0",
     "next": "^15.1.3",
