@@ -1,0 +1,18 @@
+# Local review and fundraising artifacts are not part of the web deployment.
+investor_data_room/
+pitch-deck/
+Screenshots/
+Dave.png
+Dave.png:Zone.Identifier
+Funding.md
+deploy-genlayer.mjs
+resolve-genlayer.mjs
+verify-genlayer.mjs
+AGENT.md
+*.Zone.Identifier
+contracts/
+docs/
+*.pdf
+*.mp4
+*.pptx
+*.csv
