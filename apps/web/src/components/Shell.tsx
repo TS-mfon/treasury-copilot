@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, TerminalSquare, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
 import { useOwnerSession } from "@/components/OwnerSessionProvider";
@@ -12,6 +12,7 @@ import { PublicTransitionLink } from "@/components/PublicTransitionLink";
 const publicNav = [
   { href: "/setup", label: "Setup", icon: ShieldCheck },
   { href: "/agent", label: "Agent API", icon: Bot },
+  { href: "/console", label: "Console", icon: TerminalSquare },
   { href: "/docs", label: "Docs", icon: BookOpen },
 ];
 
