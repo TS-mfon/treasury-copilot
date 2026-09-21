@@ -321,9 +321,18 @@ NEXT_PUBLIC_BASE_TREASURY_OPERATOR_ADDRESS
 NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS
 ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
 NEXT_PUBLIC_ONE_SHOT_RELAYER_URL=https://relayer.1shotapi.dev/relayers
+MONGODB_URI=mongodb+srv://...
+MONGODB_DB=treasury_copilot
+ADMIN_WALLET_ALLOWLIST=0xFounderWallet
 ```
 
 The operator address must equal the address derived from `AGENT_SIGNER_PRIVATE_KEY`. The registry address must be the fresh successful deployment.
+
+The MongoDB values enable the testnet pilot operations read model, durable rate
+limits, lifecycle event storage, and tester feedback. Keep them server only.
+Verify `/api/health` reports `mongodb: healthy` before publishing the public
+pilot. See [testnet pilot operations](testnet-pilot-operations.md) for the
+operator console and data handling rules.
 
 On July 30, 2026, the production 1Shot endpoint advertised Base Mainnet chain
 `8453`, canonical USDC, target

@@ -877,12 +877,18 @@ npm run relay:dev
 | `ONE_SHOT_RELAYER_URL` | 1Shot JSON-RPC endpoint |
 | `WEB_APP_URL` | Web origin used by the standalone relay |
 | `PORT` | Optional relay service port |
+| `MONGODB_URI` | Server-only MongoDB connection for pilot operations and rate limits |
+| `MONGODB_DB` | Optional MongoDB database name, defaults to `treasury_copilot` |
+| `ADMIN_WALLET_ALLOWLIST` | Comma-separated owner wallets allowed to open pilot operations |
 
 The public and server registry values must point to the same active deployment.
 The configured operator address must match the address derived from
 `AGENT_SIGNER_PRIVATE_KEY`.
 
 See [.env.example](.env.example) for the complete template.
+
+See [testnet pilot operations](docs/testnet-pilot-operations.md) for MongoDB
+setup, operator access, correlation IDs, rate limits, and tester feedback.
 
 ## Validation and Tests
 
