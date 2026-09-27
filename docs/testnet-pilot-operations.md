@@ -20,6 +20,20 @@ rate limits, feedback storage, and pilot analytics. `MONGODB_DB` defaults to
 `treasury_copilot` when omitted. `ADMIN_WALLET_ALLOWLIST` is optional during
 local development, but must be set before public pilot operations are enabled.
 
+### MongoDB Atlas network access
+
+Atlas rejects connections from addresses outside its Network Access list during
+the TLS handshake, which surfaces as `MongoServerSelectionError` with
+`tlsv1 alert internal error` rather than an authentication failure. Vercel
+functions do not have stable egress addresses on the current plan, so the pilot
+cluster must allow `0.0.0.0/0` in **Network Access** and rely on the database
+user credential plus the server only environment variable for access control.
+A paused free tier cluster produces the same unreachable result and must be
+resumed before the health endpoint can report `healthy`.
+
+Verify the allowlist before deployment, because the spend endpoint fails closed
+when `MONGODB_URI` is configured but the cluster cannot be reached.
+
 The health endpoint reports MongoDB as `healthy` only after a live database
 ping succeeds. The service reports degraded health when durable pilot storage
 is missing or unavailable.

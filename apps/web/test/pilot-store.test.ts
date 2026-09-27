@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { correlationId, pilotRequestFromState, pilotStoreConfigured, withCorrelation } from "../src/lib/pilotStore";
+import { correlationId, pilotRequestFromState, pilotStoreConfigured, pilotStoreHealth, withCorrelation } from "../src/lib/pilotStore";
 import type { AgentApiKeyClaims } from "../src/lib/apiAuth";
 
 const address = (digit: string) => `0x${digit.repeat(40)}` as `0x${string}`;
@@ -61,4 +61,22 @@ test("pilot store is optional during local development", () => {
   delete process.env.MONGODB_URI;
   assert.equal(pilotStoreConfigured(), false);
   if (previous) process.env.MONGODB_URI = previous;
+});
+
+test("an unreachable pilot store reports unavailable without memoizing the failure", async () => {
+  const previous = process.env.MONGODB_URI;
+  process.env.MONGODB_URI = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=250&connectTimeoutMS=250";
+  globalThis.__treasuryCopilotMongoClientPromise = undefined;
+  try {
+    assert.equal(await pilotStoreHealth(), "unavailable");
+    // A rejected connect must not stay cached, or a single unreachable moment
+    // keeps reporting unavailable until the serverless instance is recycled.
+    assert.equal(globalThis.__treasuryCopilotMongoClientPromise, undefined);
+    assert.equal(await pilotStoreHealth(), "unavailable");
+    assert.equal(globalThis.__treasuryCopilotMongoClientPromise, undefined);
+  } finally {
+    globalThis.__treasuryCopilotMongoClientPromise = undefined;
+    if (previous) process.env.MONGODB_URI = previous;
+    else delete process.env.MONGODB_URI;
+  }
 });

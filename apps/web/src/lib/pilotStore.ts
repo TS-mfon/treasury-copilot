@@ -114,7 +114,12 @@ async function database(): Promise<Db | null> {
     appName: "treasury-copilot-pilot",
     maxPoolSize: 10,
     serverSelectionTimeoutMS: 3500,
-  }).connect();
+  }).connect().catch((error: unknown) => {
+    // A rejected promise must not stay memoized, or one unreachable moment
+    // poisons this instance until the platform recycles it.
+    globalThis.__treasuryCopilotMongoClientPromise = undefined;
+    throw error;
+  });
   return (await clientPromise).db(process.env.MONGODB_DB?.trim() || "treasury_copilot");
 }
 
@@ -143,7 +148,10 @@ async function collections(): Promise<PilotCollections | null> {
         { key: { request_id: 1 } },
       ]),
     ]);
-  })();
+  })().catch((error: unknown) => {
+    globalThis.__treasuryCopilotPilotIndexes = undefined;
+    throw error;
+  });
   await globalThis.__treasuryCopilotPilotIndexes;
   return {
     requests: db.collection<PilotRequestDocument>("pilot_requests"),
