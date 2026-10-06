@@ -392,3 +392,55 @@ scan. Both workers use the same idempotent on-chain review and execution leases.
 9. Test a denied cap request.
 10. Rotate the API key and verify the old key returns `invalid_api_key`.
 11. Revoke the agent and verify balance/history endpoints reject the old binding.
+
+## 10. Arc Testnet settlement
+
+Arc settles differently from Base and Arbitrum. Those chains redelegate the owner's ERC-7715
+MetaMask permission to the 1Shot relayer. Arc has neither the MetaMask Delegation Framework nor a
+1Shot capability entry, so an approved Arc payment is executed by calling `payout` on an
+`AgentTreasury` vault the owner deployed, signed by a dedicated Arc executor key.
+
+See [Arc settlement and Circle interoperability](arc.md) for the verified network constants,
+deployed addresses, and settlement evidence.
+
+Additional Vercel environment values:
+
+```text
+NEXT_PUBLIC_ARC_TESTNET_RPC_URL=https://rpc.testnet.arc.io
+NEXT_PUBLIC_ARC_TESTNET_USDC=0x3600000000000000000000000000000000000000
+NEXT_PUBLIC_ARC_TESTNET_VAULT_FACTORY=0xe47cE1C562C6355cD9Cf4cF6420Af2cD238456fB
+NEXT_PUBLIC_ARC_TESTNET_EXECUTOR_ADDRESS=0xA3bb5f926acf42460217CD1f0A88D427e5cb438b
+ARC_EXECUTOR_PRIVATE_KEY
+ARC_SETTLEMENT_ENABLED=true
+ALLOWED_EVM_CHAIN_IDS=84532,5042002
+```
+
+`ARC_EXECUTOR_PRIVATE_KEY` must be a different key from `AGENT_SIGNER_PRIVATE_KEY`. The
+application refuses to start an Arc payout when the two match, because the Arc executor must not
+also be the registry gateway or the GenLayer execution reporter. Fund the executor address with
+Arc USDC, which is the gas token, from <https://faucet.circle.com>.
+
+`ARC_SETTLEMENT_ENABLED` is a server-side kill switch. With it unset or false, an Arc binding is
+rejected before any transaction is built, in the same spirit as the gated Base Mainnet rollout.
+
+Verify the wiring before and after deploying:
+
+```bash
+npx tsx scripts/verify-arc.mts executor
+npx tsx scripts/verify-arc.mts factory
+npx tsx scripts/verify-arc.mts chain-allowlist
+npx tsx scripts/verify-arc.mts vault-executor
+npx tsx scripts/verify-arc.mts settle
+```
+
+The `settle` check performs a real 0.01 USDC payout on Arc Testnet through the application's own
+executor module, then asserts the recipient balance moved by exactly that amount and that the
+request id is recorded as executed on chain.
+
+### Known limitation
+
+The agent HTTP flow (`POST /api/v1/spend`) cannot yet target Arc. The GenLayer policy contract is
+at version 5, which stores an ERC-7715 delegation and has no field for a vault address or a
+per-request destination chain. Policy V6 is required before an agent-submitted request can settle
+on Arc. The Arc contract, executor, routing, and settlement path are in place and verified
+independently of that work.

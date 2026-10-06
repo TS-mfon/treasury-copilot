@@ -4,6 +4,8 @@ import { chainById } from "@treasury-copilot/shared";
 import type { AgentApiKeyClaims } from "@/lib/apiAuth";
 import { genlayerRead, genlayerSubmitWrite, genlayerWrite } from "@/lib/genlayerServer";
 import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
+import { executeArcVaultPayout } from "@/lib/arcVault";
+import { assertSettlementAvailable, settlementBackendForChainId } from "@/lib/executionBackend";
 import { parseAmount } from "@/lib/amounts";
 import { verifyEvidence } from "@/lib/evidence";
 
@@ -183,6 +185,16 @@ export function assertPolicyMatchesApiKey(policy: PolicyState, claims: AgentApiK
   if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
     throw new Error("Platform signer does not match the policy execution reporter");
   }
+  // Arc settles through a vault the owner deployed, so it has no ERC-7715 delegation to register.
+  // The vault address occupies the same `delegated_account` slot the delegation path uses, which
+  // is why the registry binding checks above still apply unchanged.
+  if (settlementBackendForChainId(claims.chainId) === "arc-vault") {
+    assertSettlementAvailable(claims.chainId);
+    if (!isAddress(String(policy.delegated_account ?? ""))) {
+      throw new Error("No agent treasury vault is registered for this policy");
+    }
+    return;
+  }
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Delegation is not registered for this policy");
 }
 
@@ -327,7 +339,15 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
     throw new Error("Platform signer does not match the policy execution reporter");
   }
-  if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Approved request has no active ERC-7715 delegation");
+  const settlementBackend = settlementBackendForChainId(Number(policy.evm_chain_id));
+  if (settlementBackend === "arc-vault") {
+    assertSettlementAvailable(Number(policy.evm_chain_id));
+    if (!isAddress(String(policy.delegated_account ?? ""))) {
+      throw new Error("Approved request has no registered agent treasury vault");
+    }
+  } else if (!policy.delegation_registered || !policy.delegation_payload) {
+    throw new Error("Approved request has no active ERC-7715 delegation");
+  }
   const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
   if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
   const binding = await genlayerRead<RegistryBinding>(registry as Address, "get_policy", [policyAddress], "finalized");
@@ -366,7 +386,15 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   let execution;
   let record;
   try {
-    execution = await executeOneShot(relay);
+    execution = settlementBackend === "arc-vault"
+      ? await executeArcVaultPayout({
+          chainId: Number(policy.evm_chain_id),
+          vault: String(policy.delegated_account ?? "") as Address,
+          requestId,
+          recipient: request.recipient as Address,
+          amount: request.amount_atto,
+        })
+      : await executeOneShot(relay);
     record = await genlayerWrite(policyAddress, "record_execution", [requestId, execution.tx_hash]);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Payout relay failed";
