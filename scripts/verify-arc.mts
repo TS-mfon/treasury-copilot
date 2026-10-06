@@ -318,8 +318,29 @@ async function modeDeployment() {
     failures.push(`health endpoint did not return JSON: ${body.slice(0, 200)}`);
     return;
   }
-  check(parsed.ok !== false, `health endpoint reported not ok: ${body.slice(0, 300)}`);
-  console.log(`deployment=${url} health=${response.status} body=${body.slice(0, 200)}`);
+  check(parsed.status === "healthy", `health endpoint reported ${parsed.status}: ${body.slice(0, 300)}`);
+
+  // The gate claims the deployment advertises Arc, so measure that rather than mere liveness.
+  const checks = (parsed.checks ?? {}) as Record<string, string>;
+  check(
+    checks.arc_testnet === "configured",
+    `deployment reports arc_testnet=${checks.arc_testnet}, expected "configured"`,
+  );
+
+  const chains = (parsed.settlement_chains ?? []) as Array<Record<string, unknown>>;
+  const arc = chains.find((chain) => chain.key === "arcTestnet");
+  check(arc, "deployment does not advertise Arc Testnet as a settlement chain");
+  check(arc?.chain_id === ARC_TESTNET_CHAIN_ID, `advertised Arc chain_id is ${arc?.chain_id}`);
+  check(arc?.backend === "arc-vault", `advertised Arc backend is ${arc?.backend}`);
+  check(arc?.cctp_domain === 26, `advertised Arc CCTP domain is ${arc?.cctp_domain}`);
+  check(arc?.enabled === true, "Arc settlement is advertised but not enabled on the deployment");
+
+  // Adding Arc must not have removed the existing Base Sepolia pilot.
+  const base = chains.find((chain) => chain.key === "baseSepolia");
+  check(base, "deployment no longer advertises Base Sepolia");
+  check(base?.backend === "delegated-7710", `Base Sepolia backend changed to ${base?.backend}`);
+
+  console.log(`deployment=${url} health=${response.status} arc=${checks.arc_testnet} chains=${chains.length}`);
 }
 
 function readDeploymentUrl(): string | undefined {
