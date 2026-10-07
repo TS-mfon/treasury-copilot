@@ -17,6 +17,8 @@ export interface SpendPayload {
   justification: string;
   idempotencyKey: string;
   evidence?: unknown;
+  /** Chain the payee is paid on. Defaults to the policy's own settlement chain. */
+  destinationChainId?: number;
 }
 
 export interface PolicyState {
@@ -38,6 +40,10 @@ export interface PolicyState {
   policy_nonce?: string;
   whitelist_enabled?: boolean;
   whitelisted_recipients?: string[];
+  settlement_backend?: string;
+  vault_address?: string;
+  vault_registered?: boolean;
+  allowed_destination_chains?: string[];
 }
 
 export interface RegistryBinding {
@@ -71,6 +77,11 @@ export interface RequestState {
   evidence?: unknown[];
   evidence_digest?: string;
   invoice_key?: string;
+  destination_chain_id?: string;
+  route?: string;
+  bridge_tx_hash?: string;
+  attestation_status?: string;
+  destination_tx_hash?: string;
 }
 
 export function chainToApi(chainId: number) {
@@ -139,6 +150,7 @@ export function parseSpendPayload(value: unknown): SpendPayload {
   const agent = body.agent ?? body.agent_address;
   const idempotencyKey = body.idempotency_key ?? body.idempotencyKey;
   const evidence = body.evidence;
+  const destination = body.destination_chain ?? body.destination_chain_id ?? body.destinationChainId;
 
   if (typeof agent !== "string" || !isAddress(agent)) throw new Error("agent_address is required and must be a valid address");
   if (typeof recipient !== "string" || !isAddress(recipient)) throw new Error("Invalid recipient");
@@ -149,6 +161,17 @@ export function parseSpendPayload(value: unknown): SpendPayload {
     throw new Error("idempotency_key must be 8-128 characters using letters, numbers, dot, underscore, colon, or dash");
   }
 
+  let destinationChainId: number | undefined;
+  if (destination !== undefined && destination !== null && destination !== "") {
+    const parsed = typeof destination === "number" ? destination : Number(String(destination).trim());
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new Error("destination_chain must be a positive integer chain id");
+    }
+    // Reject an unknown chain here so the agent gets a clear error instead of a GenLayer denial.
+    if (!chainById(parsed)) throw new Error(`destination_chain ${parsed} is not a supported chain`);
+    destinationChainId = parsed;
+  }
+
   return {
     agent: agent as Address,
     recipient: recipient as Address,
@@ -157,6 +180,7 @@ export function parseSpendPayload(value: unknown): SpendPayload {
     justification: justification.trim(),
     idempotencyKey,
     evidence,
+    destinationChainId,
   };
 }
 
@@ -190,12 +214,59 @@ export function assertPolicyMatchesApiKey(policy: PolicyState, claims: AgentApiK
   // is why the registry binding checks above still apply unchanged.
   if (settlementBackendForChainId(claims.chainId) === "arc-vault") {
     assertSettlementAvailable(claims.chainId);
-    if (!isAddress(String(policy.delegated_account ?? ""))) {
-      throw new Error("No agent treasury vault is registered for this policy");
+    const vault = vaultAddressFor(policy);
+    if (!vault) throw new Error("No agent treasury vault is registered for this policy");
+    // On a V6 policy the vault is explicit. Older shapes reuse `delegated_account`, which the
+    // registry binding checks above already pinned, so both are safe to accept.
+    if (Number(policy.contract_version ?? 0) >= 6 && policy.vault_registered !== true) {
+      throw new Error("Policy migration required: register the agent treasury vault before spending");
     }
     return;
   }
   if (!policy.delegation_registered || !policy.delegation_payload) throw new Error("Delegation is not registered for this policy");
+}
+
+/**
+ * Resolve the Arc settlement vault for a policy.
+ *
+ * V6 stores it explicitly in `vault_address`. Earlier shapes carry it in `delegated_account`,
+ * which is the slot the registry binding pins for Arc, so it is an equally verified source.
+ */
+export interface SpendRequestIdentity {
+  recipient: Address;
+  amountUnits: bigint;
+  category: string;
+  justification: string;
+  destinationChainId: number;
+  evidenceDigest: string;
+  /** Used to read a pre-V6 record, which has no stored destination, as its own settlement chain. */
+  settlementChainId: number;
+}
+
+/**
+ * Whether a replayed idempotency key describes the same payment as the stored request.
+ *
+ * The destination chain is part of a request's identity. Without it, one key could be replayed
+ * with a different destination and be accepted as an already-approved payment, which would let a
+ * caller redirect approved funds to another chain.
+ */
+export function isSameSpendRequest(existing: RequestState, candidate: SpendRequestIdentity): boolean {
+  const existingDestination = String(existing.destination_chain_id ?? candidate.settlementChainId);
+  return (
+    lower(existing.recipient) === candidate.recipient.toLowerCase()
+    && existing.amount_atto === candidate.amountUnits.toString()
+    && existing.category === candidate.category
+    && existing.justification === candidate.justification
+    && existingDestination === String(candidate.destinationChainId)
+    && lower(existing.evidence_digest) === candidate.evidenceDigest.toLowerCase()
+  );
+}
+
+export function vaultAddressFor(policy: PolicyState): Address | undefined {
+  const explicit = String(policy.vault_address ?? "");
+  if (isAddress(explicit)) return explicit as Address;
+  const funding = String(policy.delegated_account ?? "");
+  return isAddress(funding) ? (funding as Address) : undefined;
 }
 
 export function publicPolicyState(policy: PolicyState) {
@@ -213,6 +284,9 @@ export function publicPolicyState(policy: PolicyState) {
     whitelist_enabled: policy.whitelist_enabled === true,
     whitelisted_recipients: policy.whitelisted_recipients ?? [],
     delegation_registered: policy.delegation_registered === true,
+    settlement_backend: policy.settlement_backend ?? "delegated-7710",
+    vault_registered: policy.vault_registered === true,
+    allowed_destination_chains: policy.allowed_destination_chains ?? [],
     security: policySecurityProfile(policy),
   };
 }
@@ -253,6 +327,7 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
   await assertRegistryBinding(claims);
 
   const amountAtto = amountToUnits(payload.amount, claims.tokenDecimals);
+  const destinationChainId = payload.destinationChainId ?? claims.chainId;
   const requestId = deriveRequestId(claims, payload.idempotencyKey);
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
   const justificationHash = keccak256(stringToHex(payload.justification));
@@ -267,12 +342,15 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
   const requestIds = await listPolicyRequests(claims.policy);
   if (requestIds.some((id) => id.toLowerCase() === requestId.toLowerCase())) {
     const existing = await readPolicyRequest(claims.policy, requestId);
-    const samePayload =
-      lower(existing.recipient) === payload.recipient.toLowerCase()
-      && existing.amount_atto === amountAtto.toString()
-      && existing.category === payload.category
-      && existing.justification === payload.justification
-      && lower(existing.evidence_digest) === evidence.digest.toLowerCase();
+    const samePayload = isSameSpendRequest(existing, {
+      recipient: payload.recipient,
+      amountUnits: amountAtto,
+      category: payload.category,
+      justification: payload.justification,
+      destinationChainId,
+      evidenceDigest: evidence.digest,
+      settlementChainId: claims.chainId,
+    });
     if (!samePayload) throw new Error("idempotency_key was already used with a different request");
     return {
       requestId,
@@ -295,6 +373,7 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
     requestId,
     deadline,
     claims.agent,
+    String(destinationChainId),
   ]);
   const now = new Date().toISOString();
   const requestState: RequestState = {
@@ -315,6 +394,8 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
     execution_error: "",
     execution_claimed_at: "",
     finalized: false,
+    destination_chain_id: String(destinationChainId),
+    route: destinationChainId === claims.chainId ? "direct" : "cctp",
   };
   return {
     requestId,
@@ -342,7 +423,7 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   const settlementBackend = settlementBackendForChainId(Number(policy.evm_chain_id));
   if (settlementBackend === "arc-vault") {
     assertSettlementAvailable(Number(policy.evm_chain_id));
-    if (!isAddress(String(policy.delegated_account ?? ""))) {
+    if (!vaultAddressFor(policy)) {
       throw new Error("Approved request has no registered agent treasury vault");
     }
   } else if (!policy.delegation_registered || !policy.delegation_payload) {
@@ -389,7 +470,7 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
     execution = settlementBackend === "arc-vault"
       ? await executeArcVaultPayout({
           chainId: Number(policy.evm_chain_id),
-          vault: String(policy.delegated_account ?? "") as Address,
+          vault: vaultAddressFor(policy) as Address,
           requestId,
           recipient: request.recipient as Address,
           amount: request.amount_atto,
@@ -447,5 +528,19 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
     updated_at: row.updated_at ?? row.created_at,
     explorer_url: row.tx_hash && explorer ? `${explorer}/tx/${row.tx_hash}` : null,
     chain: chainId ? chainToApi(chainId) : null,
+    route: row.route ?? "direct",
+    destination_chain: row.destination_chain_id
+      ? chainToApi(Number(row.destination_chain_id))
+      : chainId
+        ? chainToApi(chainId)
+        : null,
+    bridge: {
+      tx_hash: row.bridge_tx_hash ?? "",
+      attestation_status: row.attestation_status ?? "",
+      destination_tx_hash: row.destination_tx_hash ?? "",
+      destination_explorer_url: row.destination_tx_hash && row.destination_chain_id
+        ? `${chainById(Number(row.destination_chain_id))?.explorerUrl ?? ""}/tx/${row.destination_tx_hash}`
+        : null,
+    },
   };
 }

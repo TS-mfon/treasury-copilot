@@ -164,15 +164,59 @@ npm run typecheck
 npm run lint
 ```
 
+## Test 8: destination chains on the agent API
+
+Once an Arc-bound V6 policy is registered, `POST /api/v1/spend` accepts a `destination_chain`:
+
+```bash
+curl -X POST https://treasurycopilot.app/api/v1/spend \
+  -H "authorization: Bearer $AGENT_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "agent": "0xYOUR_AGENT",
+    "recipient": "0xPAYEE",
+    "amount": "1.00",
+    "category": "infrastructure",
+    "justification": "monthly observability invoice",
+    "idempotency_key": "inv-2026-10-001",
+    "destination_chain": 84532
+  }'
+```
+
+Omit `destination_chain` to settle on the policy's own chain. An unsupported chain id is rejected
+immediately with a clear error. Replaying the same `idempotency_key` with a different
+`destination_chain` is refused, so an approved key cannot be redirected to another chain. The
+response carries `route`, `destination_chain` and a `bridge` object with the burn hash, attestation
+status and destination mint hash.
+
 ## What does not work yet
 
-**An agent cannot yet submit an Arc payment over HTTP.** `POST /api/v1/spend` still requires a
-GenLayer policy, and the policy contract is at version 5, which stores an ERC-7715 delegation and
-has no field for a vault address or a per-request destination chain. Policy V6 is the next step.
+**Test 8 needs one more step: registry registration.**
 
-So today: the Arc contract, the executor, the routing, direct Arc settlement and CCTP cross-chain
-settlement are all live and verifiable. The agent-facing HTTP path on Arc is not. Everything in
-Tests 1 through 6 exercises the real production code; none of it is a mock.
+An Arc-bound V6 policy is deployed and its vault is registered:
+
+```text
+Policy:  0x704345601942B0e7Ec503BFFD6FACA5f40D746E9
+Vault:   0xB121B87cF9e30293eb619B7eBC0554dfd3018CC2
+```
+
+You can read it yourself:
+
+```bash
+genlayer call 0x704345601942B0e7Ec503BFFD6FACA5f40D746E9 get_policy
+# contract_version: '6', settlement_backend: 'arc-vault', vault_registered: true,
+# allowed_destination_chains: [ '5042002', '84532' ]
+```
+
+What is missing is registration in the production registry. `queue_request` calls
+`_require_active_registry_binding`, and registration requires the registry gateway key, which is the
+platform signer. The application performs that server-side during owner setup, so the route to a
+live Arc agent binding is to run owner setup against Arc rather than to deploy anything further.
+
+So today: the Arc contract, the executor, the routing, direct Arc settlement, CCTP cross-chain
+settlement, and the V6 policy with its vault binding are all live and verifiable. Tests 1 through 7
+exercise real production code; none of them is a mock. Test 8 needs that one registration step
+before an agent API key can target Arc.
 
 Arc Mainnet is deliberately off. It needs a separate registry, gateway key, reporter key, executor
 key, API secrets, cron worker, feature flags, and a contract security review first.

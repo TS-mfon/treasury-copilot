@@ -25,6 +25,11 @@ class PolicyRequest:
     evidence_json: str
     evidence_digest: str
     invoice_key: str
+    destination_chain_id: str
+    route: str
+    bridge_tx_hash: str
+    attestation_status: str
+    destination_tx_hash: str
     verdict: str
     reasoning: str
     tx_hash: str
@@ -96,6 +101,8 @@ class TreasuryPolicy(gl.Contract):
     token_address: str
     delegation_context: str
     delegation_payload: str
+    settlement_backend: str
+    vault_address: str
     one_shot_method_id: str
     evm_chain_id: u256
     per_tx_cap_atto: u256
@@ -104,6 +111,8 @@ class TreasuryPolicy(gl.Contract):
     whitelist_enabled: bool
     whitelist: TreeMap[str, bool]
     whitelist_order: DynArray[str]
+    allowed_destination_chains: TreeMap[str, bool]
+    destination_chain_order: DynArray[str]
     policy_text: str
     requests: TreeMap[str, PolicyRequest]
     request_order: DynArray[str]
@@ -128,6 +137,8 @@ class TreasuryPolicy(gl.Contract):
         auto_approve_threshold_atto: u256,
         policy_text: str,
         whitelist_csv: str,
+        settlement_backend: str = "delegated-7710",
+        destination_chains_csv: str = "none",
     ):
         # The platform deploys this contract, but the human wallet remains the
         # logical policy owner used for registry binding and owner authorizations.
@@ -148,6 +159,27 @@ class TreasuryPolicy(gl.Contract):
             raise gl.vm.UserError(
                 f"{ERROR_EXPECTED} Policy V5 removed fast approval; threshold must be 0"
             )
+        backend = _lower(settlement_backend)
+        if backend not in ("delegated-7710", "arc-vault"):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Unknown settlement backend")
+        self.settlement_backend = backend
+        self.vault_address = ""
+
+        # The settlement chain is always a permitted destination. Without this an owner who
+        # configured no allowlist could never be paid on their own chain.
+        self.allowed_destination_chains[str(evm_chain_id)] = True
+        self.destination_chain_order.append(str(evm_chain_id))
+        for item in str(destination_chains_csv).split(","):
+            chain = _lower(item)
+            if chain in ("", "0", "false", "none"):
+                continue
+            if not chain.isdigit():
+                raise gl.vm.UserError(f"{ERROR_EXPECTED} Destination chain must be numeric")
+            if chain == str(evm_chain_id):
+                continue
+            self.allowed_destination_chains[chain] = True
+            self.destination_chain_order.append(chain)
+
         self.policy_text = policy_text
         self.weekly_spent_atto = u256(0)
         self.week_started_at = "deployment"
@@ -175,6 +207,7 @@ class TreasuryPolicy(gl.Contract):
         request_id: str,
         deadline: u256,
         on_behalf_of: str = "",
+        destination_chain_id: str = "",
     ) -> dict:
         # The GenLayer transaction itself is signed by the platform account.
         # The pinned GenVM runner does not ship web3.py/eth-account.
@@ -206,31 +239,54 @@ class TreasuryPolicy(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Agent attribution mismatch")
         self._require_active_registry_binding(on_behalf_of)
 
+        # An empty destination means settle on the policy's own chain, which keeps every V5-shaped
+        # caller working unchanged.
+        destination = str(destination_chain_id).strip()
+        if destination == "":
+            destination = str(self.evm_chain_id)
+        if not destination.isdigit():
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Destination chain must be numeric")
+        route = "direct" if destination == str(self.evm_chain_id) else "cctp"
+
         self._maybe_reset_weekly_window()
 
         if amount_atto == u256(0):
             return self._store_deterministic_denial(
                 request_id, recipient, amount_atto, category, justification,
                 evidence_json, evidence_digest, invoice_key,
+                destination, route,
                 "Amount must be greater than zero",
             )
         if amount_atto > self.per_tx_cap_atto:
             return self._store_deterministic_denial(
                 request_id, recipient, amount_atto, category, justification,
                 evidence_json, evidence_digest, invoice_key,
+                destination, route,
                 "Exceeds per-transaction cap",
             )
         if self.weekly_spent_atto + amount_atto > self.weekly_cap_atto:
             return self._store_deterministic_denial(
                 request_id, recipient, amount_atto, category, justification,
                 evidence_json, evidence_digest, invoice_key,
+                destination, route,
                 "Would exceed weekly cap",
             )
         if self.whitelist_enabled and not self._is_whitelisted(recipient):
             return self._store_deterministic_denial(
                 request_id, recipient, amount_atto, category, justification,
                 evidence_json, evidence_digest, invoice_key,
+                destination, route,
                 "Recipient not on whitelist",
+            )
+        # The owner controls which chains an agent may be paid on. A destination outside that set
+        # is refused here so it never reaches policy review, and so a relayer can never redirect an
+        # approved payment to an unapproved chain.
+        if not self._is_allowed_destination(destination):
+            return self._store_deterministic_denial(
+                request_id, recipient, amount_atto, category, justification,
+                evidence_json, evidence_digest, invoice_key,
+                destination, route,
+                "Destination chain is not permitted by this policy",
             )
 
         if invoice_key != "":
@@ -256,6 +312,8 @@ class TreasuryPolicy(gl.Contract):
             evidence_json,
             evidence_digest,
             invoice_key,
+            destination,
+            route,
             "pending",
             "GenLayer prompt-comparative review is running",
             "",
@@ -268,6 +326,7 @@ class TreasuryPolicy(gl.Contract):
             category,
             justification,
             evidence_json,
+            destination,
         )
         req = self.requests[request_id]
         if bool(verdict["approved"]):
@@ -289,12 +348,16 @@ class TreasuryPolicy(gl.Contract):
         if self.whitelist_enabled and not self._is_whitelisted(req.recipient):
             return self._finalize_denial(req, "Recipient not on whitelist")
 
+        if not self._is_allowed_destination(req.destination_chain_id):
+            return self._finalize_denial(req, "Destination chain is not permitted by this policy")
+
         verdict = self._evaluate_with_llm(
             req.recipient,
             req.atto_amount,
             req.category,
             req.justification,
             req.evidence_json,
+            req.destination_chain_id,
         )
         if bool(verdict["approved"]):
             return self._finalize_approval(req, str(verdict["reasoning"]))
@@ -445,10 +508,88 @@ class TreasuryPolicy(gl.Contract):
         self.delegation_context = str(delegation_context)
         return self.get_policy()
 
+    @gl.public.write
+    def register_vault(self, vault_address: str, token_address: str) -> dict:
+        """Bind an Arc agent treasury vault to this policy.
+
+        This is the arc-vault counterpart to register_delegation. Arc has no MetaMask Delegation
+        Framework, so an owner proves settlement authority by deploying a vault that names the
+        platform executor rather than by signing an ERC-7715 permission.
+        """
+        self._require_owner_or_execution_reporter()
+        if self.settlement_backend != "arc-vault":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Policy does not use vault settlement")
+        vault_address = _require_address_string(vault_address, "vault address")
+        if _lower(str(token_address)) != _lower(self.token_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Token mismatch")
+        if _lower(vault_address) != _lower(self.delegated_account):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Vault does not match the registered funding account")
+        self.vault_address = vault_address
+        return self.get_policy()
+
+    @gl.public.write
+    def set_destination_chain_entry(self, destination_chain_id: str, allowed: bool, nonce: u256) -> dict:
+        self._require_owner_or_execution_reporter()
+        if nonce != self.policy_nonce:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid policy nonce")
+        chain = _lower(destination_chain_id)
+        if not chain.isdigit():
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Destination chain must be numeric")
+        # The settlement chain must stay payable, otherwise the policy could lock itself out.
+        if chain == str(self.evm_chain_id) and not allowed:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Cannot disallow the settlement chain")
+        try:
+            self.allowed_destination_chains[chain]
+        except KeyError:
+            self.destination_chain_order.append(chain)
+        self.allowed_destination_chains[chain] = allowed
+        self.policy_nonce = self.policy_nonce + u256(1)
+        return {"destination_chain_id": chain, "allowed": allowed}
+
+    @gl.public.write
+    def record_bridge_initiated(self, request_id: str, bridge_tx_hash: str) -> dict:
+        """Record a CCTP burn. Tracked separately from execution so a bridged payment has an
+        independent source-chain, attestation and destination-chain state."""
+        self._require_execution_reporter()
+        request_id = _hex32(request_id)
+        self._require_existing_request(request_id)
+        req = self.requests[request_id]
+        if req.verdict != VERDICT_APPROVED:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Cannot bridge a denied request")
+        if req.route != "cctp":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Request is not a cross-chain route")
+        if req.execution_status != "executing":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Request is not claimed for execution")
+        if req.bridge_tx_hash != "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Bridge already initiated")
+        req.bridge_tx_hash = _hex32(bridge_tx_hash)
+        req.attestation_status = "pending"
+        req.execution_status = "bridging"
+        req.updated_at = str(gl.message_raw["datetime"])
+        self.requests[request_id] = req
+        return {"request_id": request_id, "bridge_tx_hash": req.bridge_tx_hash}
+
+    @gl.public.write
+    def record_bridge_attested(self, request_id: str, destination_tx_hash: str) -> dict:
+        self._require_execution_reporter()
+        request_id = _hex32(request_id)
+        self._require_existing_request(request_id)
+        req = self.requests[request_id]
+        if req.bridge_tx_hash == "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Bridge was never initiated")
+        if req.execution_status != "bridging":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Request is not bridging")
+        req.destination_tx_hash = _hex32(destination_tx_hash)
+        req.attestation_status = "attested"
+        req.execution_status = "executing"
+        req.updated_at = str(gl.message_raw["datetime"])
+        self.requests[request_id] = req
+        return {"request_id": request_id, "destination_tx_hash": req.destination_tx_hash}
+
     @gl.public.view
     def get_policy(self) -> dict:
         return {
-            "contract_version": "5",
+            "contract_version": "6",
             "owner": str(self.owner),
             "registry": str(self.registry),
             "authorized_agent": str(self.authorized_agent),
@@ -458,6 +599,10 @@ class TreasuryPolicy(gl.Contract):
             "delegation_context": self.delegation_context,
             "delegation_registered": self.delegation_payload != "",
             "delegation_payload": self.delegation_payload,
+            "settlement_backend": self.settlement_backend,
+            "vault_address": self.vault_address,
+            "vault_registered": self.vault_address != "",
+            "allowed_destination_chains": self._active_destination_chains(),
             "one_shot_method_id": self.one_shot_method_id,
             "evm_chain_id": str(self.evm_chain_id),
             "per_tx_cap_atto": str(self.per_tx_cap_atto),
@@ -485,6 +630,11 @@ class TreasuryPolicy(gl.Contract):
             "evidence": json.loads(req.evidence_json) if req.evidence_json != "" else [],
             "evidence_digest": req.evidence_digest,
             "invoice_key": req.invoice_key,
+            "destination_chain_id": req.destination_chain_id,
+            "route": req.route,
+            "bridge_tx_hash": req.bridge_tx_hash,
+            "attestation_status": req.attestation_status,
+            "destination_tx_hash": req.destination_tx_hash,
             "verdict": req.verdict,
             "reasoning": req.reasoning,
             "tx_hash": req.tx_hash,
@@ -510,6 +660,7 @@ class TreasuryPolicy(gl.Contract):
         category: str,
         justification: str,
         evidence_json: str,
+        destination_chain_id: str,
     ) -> dict:
         prompt = f"""You are evaluating a spending request for a personal Treasury Copilot.
 
@@ -541,6 +692,11 @@ Request:
 - category: {category}
 - justification: {justification}
 - verified_evidence: {evidence_json if evidence_json != "" else "[]"}
+- settlement_chain_id: {self.evm_chain_id}
+- destination_chain_id: {destination_chain_id}
+
+The destination chain is already confirmed to be on the owner's permitted list. Apply the policy
+to decide whether paying on that chain is appropriate for this request.
 
 Return JSON only:
 {{"approved": true or false}}"""
@@ -587,6 +743,10 @@ Return JSON only:
                 "policy": str(gl.message.contract_address),
                 "method_id": self.one_shot_method_id,
                 "chain_id": str(self.evm_chain_id),
+                "settlement_backend": self.settlement_backend,
+                "vault_address": self.vault_address,
+                "destination_chain_id": req.destination_chain_id,
+                "route": req.route,
                 "delegated_account": self.delegated_account,
                 "token": self.token_address,
                 "delegation": "metamask-smart-account-payout",
@@ -621,6 +781,8 @@ Return JSON only:
         evidence_json: str,
         evidence_digest: str,
         invoice_key: str,
+        destination_chain_id: str,
+        route: str,
         reasoning: str,
     ) -> dict:
         self._store_request(
@@ -632,6 +794,8 @@ Return JSON only:
             evidence_json,
             evidence_digest,
             invoice_key,
+            destination_chain_id,
+            route,
             VERDICT_DENIED,
             reasoning,
             "",
@@ -650,6 +814,8 @@ Return JSON only:
         evidence_json: str,
         evidence_digest: str,
         invoice_key: str,
+        destination_chain_id: str,
+        route: str,
         verdict: str,
         reasoning: str,
         tx_hash: str,
@@ -666,6 +832,11 @@ Return JSON only:
             evidence_json=evidence_json,
             evidence_digest=evidence_digest,
             invoice_key=invoice_key,
+            destination_chain_id=destination_chain_id,
+            route=route,
+            bridge_tx_hash="",
+            attestation_status="",
+            destination_tx_hash="",
             verdict=verdict,
             reasoning=reasoning,
             tx_hash=tx_hash,
@@ -695,6 +866,19 @@ Return JSON only:
             return bool(self.whitelist[_lower(recipient)])
         except KeyError:
             return False
+
+    def _is_allowed_destination(self, destination_chain_id: str) -> bool:
+        try:
+            return bool(self.allowed_destination_chains[_lower(destination_chain_id)])
+        except KeyError:
+            return False
+
+    def _active_destination_chains(self) -> list[str]:
+        result = []
+        for chain in self.destination_chain_order:
+            if self._is_allowed_destination(chain):
+                result.append(chain)
+        return result
 
     def _active_whitelist(self) -> list[str]:
         result = []

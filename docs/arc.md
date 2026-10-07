@@ -235,6 +235,24 @@ Confirmed by `eth_call` against the deployed vault:
 Replay protection is shared between `payout` and `payoutCrossChain`, so one approved request can
 never be both settled locally and bridged.
 
+## Policy V6
+
+GenLayer policy V6 is what lets an agent-submitted request settle on Arc. V5 stores an ERC-7715
+delegation and has no way to express a vault or a destination chain, so an Arc binding could not be
+registered at all.
+
+V6 adds a `settlement_backend` (`delegated-7710` or `arc-vault`), a `vault_address` with a
+`register_vault` write, an owner-controlled destination-chain allowlist, a per-request
+`destination_chain_id` and `route`, and independent `bridge_tx_hash` / `attestation_status` /
+`destination_tx_hash` lifecycle fields.
+
+A destination outside the owner's allowlist is denied deterministically, before any LLM review
+runs. That ordering is verified by `scripts/policy_v6_harness.py`, which loads the real contract
+source under stubbed GenVM primitives and asserts the prompt function is never reached for a
+denied destination.
+
+See [deployment](deployment.md) for the V6 constructor arguments and the owner migration steps.
+
 ## Mainnet status
 
 Arc Mainnet is **not enabled**. Consistent with `docs/deployment.md`, enabling real-fund settlement

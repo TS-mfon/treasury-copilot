@@ -223,6 +223,7 @@ function modeNoSecrets() {
     env.OWNER_SESSION_SECRET,
     env.AGENT_API_KEY_SECRET,
     env.CRON_SECRET,
+    env.GENLAYER_KEYSTORE_PASSWORD,
   ].filter((value): value is string => Boolean(value) && value.length >= 16);
   check(secrets.length > 0, "no secrets were loaded, so this check would pass vacuously");
 
