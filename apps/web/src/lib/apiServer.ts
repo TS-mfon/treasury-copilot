@@ -7,6 +7,7 @@ import { executeOneShot, type OneShotRelayRequest } from "@/lib/oneShot7710";
 import { executeArcVaultPayout } from "@/lib/arcVault";
 import { assertSettlementAvailable, settlementBackendForChainId } from "@/lib/executionBackend";
 import { parseAmount } from "@/lib/amounts";
+import { env } from "@/lib/env";
 import { verifyEvidence } from "@/lib/evidence";
 
 export interface SpendPayload {
@@ -291,6 +292,21 @@ export function publicPolicyState(policy: PolicyState) {
   };
 }
 
+/**
+ * Enforce the GenLayer policy allowlist.
+ *
+ * `ALLOWED_GENLAYER_POLICY_ADDRESSES` was previously parsed into `env().allowedGenlayerPolicyAddresses`
+ * and never read, so it looked like a control and was not one. An empty list means unrestricted,
+ * which preserves existing deployments; a non-empty list is now actually enforced.
+ */
+export function assertPolicyAllowed(policy: Address, allowed?: ReadonlySet<string>) {
+  const list = allowed ?? env().allowedGenlayerPolicyAddresses;
+  if (list.size === 0) return;
+  if (!list.has(policy.toLowerCase())) {
+    throw new Error("This policy address is not allowed on this deployment");
+  }
+}
+
 export async function assertRegistryBinding(claims: AgentApiKeyClaims) {
   const registry = process.env.GENLAYER_REGISTRY ?? process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
   if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
@@ -322,6 +338,7 @@ export async function submitSpendThroughPolicy(claims: AgentApiKeyClaims, payloa
     throw new Error("Request agent does not match API key");
   }
 
+  assertPolicyAllowed(claims.policy);
   const policy = await readPolicyState(claims.policy);
   assertPolicyMatchesApiKey(policy, claims);
   await assertRegistryBinding(claims);
@@ -416,6 +433,7 @@ export async function reviewQueuedPolicyRequest(policyAddress: Address, requestI
 }
 
 export async function executeApprovedPolicyRequest(policyAddress: Address, requestId: Hex) {
+  assertPolicyAllowed(policyAddress);
   const policy = await readPolicyState(policyAddress, "finalized");
   if (lower(policy.execution_reporter) !== platformAccount().address.toLowerCase()) {
     throw new Error("Platform signer does not match the policy execution reporter");
@@ -474,9 +492,16 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
           requestId,
           recipient: request.recipient as Address,
           amount: request.amount_atto,
+          destinationChainId: Number(request.destination_chain_id ?? policy.evm_chain_id),
         })
       : await executeOneShot(relay);
-    record = await genlayerWrite(policyAddress, "record_execution", [requestId, execution.tx_hash]);
+
+    // A CCTP burn is not yet the payee's receipt, so it is recorded as a bridge initiation and the
+    // cron bridge stage completes the request once Circle has minted on the destination chain.
+    const bridged = "route" in execution && execution.route === "cctp";
+    record = bridged
+      ? await genlayerWrite(policyAddress, "record_bridge_initiated", [requestId, execution.tx_hash])
+      : await genlayerWrite(policyAddress, "record_execution", [requestId, execution.tx_hash]);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Payout relay failed";
     await genlayerWrite(policyAddress, "record_execution_failure", [requestId, message]).catch(() => undefined);

@@ -1,6 +1,14 @@
 import { createPublicClient, createWalletClient, http, isAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { agentTreasuryAbi, chainById, type ChainConfig } from "@treasury-copilot/shared";
+import {
+  CctpUnsupportedError,
+  FORWARDING_HOOK_DATA,
+  quoteFee,
+  resolveRoute,
+  type CctpFeeQuote,
+  type CctpRoute,
+} from "@/lib/cctp";
 
 /**
  * Server-side Arc settlement.
@@ -19,12 +27,18 @@ export interface ArcVaultPayoutRequest {
   recipient: Address;
   /** Amount in token base units (USDC uses 6 decimals on Arc's ERC-20 interface). */
   amount: string;
+  /** Chain the payee receives on. Defaults to the vault's own chain. */
+  destinationChainId?: number;
 }
 
 export interface ArcVaultExecutionResult {
   tx_hash: Hex;
   raw: unknown;
   mode: "arc-vault";
+  /** "direct" settles on the vault's chain; "cctp" burns for delivery on another chain. */
+  route: "direct" | "cctp";
+  /** Present for a cctp route: the burn transaction is not yet the payee's receipt. */
+  bridge?: { route: CctpRoute; quote: CctpFeeQuote; burnTxHash: Hex };
 }
 
 function arcChainConfig(chainId: number): ChainConfig {
@@ -76,17 +90,18 @@ export function arcPublicClient(chainId: number) {
  * `executed` is checked first because it is the one condition that is permanent: a replayed
  * request must be reported as already settled rather than retried forever by the cron worker.
  */
-export async function preflightArcVaultPayout(request: ArcVaultPayoutRequest) {
+export async function preflightArcVaultPayout(request: ArcVaultPayoutRequest, maxFee = 0n) {
   const chain = arcChainConfig(request.chainId);
   const client = arcPublicClient(request.chainId);
   const account = arcExecutorAccount();
   const at = { address: request.vault, abi: agentTreasuryAbi } as const;
 
-  const [executed, executor, paused, availableBalance, gas] = await Promise.all([
+  const [executed, executor, paused, availableBalance, feeReserve, gas] = await Promise.all([
     client.readContract({ ...at, functionName: "executed", args: [request.requestId] }) as Promise<boolean>,
     client.readContract({ ...at, functionName: "executor" }) as Promise<Address>,
     client.readContract({ ...at, functionName: "paused" }) as Promise<boolean>,
     client.readContract({ ...at, functionName: "availableBalance" }) as Promise<bigint>,
+    client.readContract({ ...at, functionName: "feeReserve" }) as Promise<bigint>,
     client.getBalance({ address: account.address }),
   ]);
 
@@ -101,17 +116,89 @@ export async function preflightArcVaultPayout(request: ArcVaultPayoutRequest) {
   if (availableBalance < amount) {
     throw new Error(`Arc vault has ${availableBalance} available but the request needs ${amount}`);
   }
+  // The CCTP fee is drawn from the bounded reserve, never from the approved principal.
+  if (maxFee > 0n && feeReserve < maxFee) {
+    throw new Error(`Arc vault fee reserve is ${feeReserve} but the CCTP fee needs ${maxFee}`);
+  }
   // Arc charges gas in native USDC, so an unfunded executor stalls settlement silently.
   if (gas === 0n) throw new Error(`Arc executor ${account.address} has no ${chain.nativeSymbol} for gas`);
 
-  return { account, client, chain, amount };
+  return { account, client, chain, amount, feeReserve };
+}
+
+export interface VaultPayoutPlan {
+  functionName: "payout" | "payoutCrossChain";
+  args: readonly unknown[];
+  route: "direct" | "cctp";
+}
+
+/**
+ * Decide which vault call settles a request.
+ *
+ * Pure so the routing choice can be proven without a wallet: a same-chain request must use
+ * `payout`, and a cross-chain request must burn principal plus the quoted fee so CCTP's deduction
+ * still leaves the payee whole.
+ */
+export function planVaultPayout(
+  request: ArcVaultPayoutRequest,
+  route?: CctpRoute,
+  quote?: CctpFeeQuote,
+): VaultPayoutPlan {
+  const destinationChainId = request.destinationChainId ?? request.chainId;
+  const amount = BigInt(request.amount);
+
+  if (destinationChainId === request.chainId) {
+    return {
+      functionName: "payout",
+      args: [request.requestId, request.recipient, amount],
+      route: "direct",
+    };
+  }
+  if (!route || !quote) {
+    throw new Error("A cross-chain payout needs a resolved CCTP route and fee quote");
+  }
+  return {
+    functionName: "payoutCrossChain",
+    args: [
+      request.requestId,
+      request.recipient,
+      amount,
+      route.destinationDomain,
+      quote.maxFee,
+      quote.minFinalityThreshold,
+      // Hook data routes the mint through Circle's Forwarding Service, so no executor or gas
+      // balance is needed on the destination chain.
+      quote.forwarded ? FORWARDING_HOOK_DATA : "0x",
+    ],
+    route: "cctp",
+  };
 }
 
 export async function executeArcVaultPayout(request: ArcVaultPayoutRequest): Promise<ArcVaultExecutionResult> {
   if (!isAddress(request.vault)) throw new Error("Arc vault address is invalid");
   if (!isAddress(request.recipient)) throw new Error("Arc recipient address is invalid");
 
-  const { account, client, chain, amount } = await preflightArcVaultPayout(request);
+  const destinationChainId = request.destinationChainId ?? request.chainId;
+  const crossChain = destinationChainId !== request.chainId;
+
+  // Quote before preflight so the reserve check knows the real fee. A quote failure must abort
+  // rather than silently degrade into a same-chain payout to the wrong network.
+  let route: CctpRoute | undefined;
+  let quote: CctpFeeQuote | undefined;
+  if (crossChain) {
+    try {
+      route = resolveRoute(request.chainId, destinationChainId);
+      quote = await quoteFee(route, { forwarded: true });
+    } catch (error) {
+      if (error instanceof CctpUnsupportedError) {
+        throw new Error(`Cross-chain settlement unavailable at the ${error.stage} stage: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  // planVaultPayout derives the amount itself, so only the clients and chain are needed here.
+  const { account, client, chain } = await preflightArcVaultPayout(request, quote?.maxFee ?? 0n);
 
   const wallet = createWalletClient({
     account,
@@ -125,30 +212,37 @@ export async function executeArcVaultPayout(request: ArcVaultPayoutRequest): Pro
   const floor = chain.minMaxFeePerGas ?? 0n;
   const maxFeePerGas = fees?.maxFeePerGas && fees.maxFeePerGas > floor ? fees.maxFeePerGas : floor;
   const maxPriorityFeePerGas = fees?.maxPriorityFeePerGas ?? 0n;
+  const gasOverrides = maxFeePerGas > 0n ? { maxFeePerGas, maxPriorityFeePerGas } : {};
 
+  const plan = planVaultPayout(request, route, quote);
   const hash = await wallet.writeContract({
     chain: chain.viemChain,
     address: request.vault,
     abi: agentTreasuryAbi,
-    functionName: "payout",
-    args: [request.requestId, request.recipient, amount],
-    ...(maxFeePerGas > 0n ? { maxFeePerGas, maxPriorityFeePerGas } : {}),
+    functionName: plan.functionName,
+    // The plan is built from the same request and quote the preflight validated.
+    args: plan.args as never,
+    ...gasOverrides,
   });
 
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") {
-    throw new Error(`Arc payout transaction ${hash} reverted`);
+    throw new Error(`Arc ${crossChain ? "cross-chain burn" : "payout"} transaction ${hash} reverted`);
   }
 
   return {
     tx_hash: hash,
     raw: {
       chainId: chain.chainId,
+      destinationChainId,
       vault: request.vault,
       executor: account.address,
       blockNumber: receipt.blockNumber.toString(),
       gasUsed: receipt.gasUsed.toString(),
+      ...(quote ? { maxFee: quote.maxFee.toString(), forwarded: quote.forwarded } : {}),
     },
     mode: "arc-vault",
+    route: crossChain ? "cctp" : "direct",
+    ...(crossChain && route && quote ? { bridge: { route, quote, burnTxHash: hash } } : {}),
   };
 }

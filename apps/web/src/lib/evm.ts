@@ -26,7 +26,10 @@ export function getViemChain(key: SupportedChainKey) {
 
 export function publicClientFor(key: SupportedChainKey) {
   const chain = getViemChain(key);
-  const rpcUrl = {
+  // Each entry must read process.env.X statically so Next.js inlines it into the client bundle;
+  // a dynamic process.env[name] lookup would be undefined in the browser. The map is partial on
+  // purpose: a CCTP destination chain with no override falls back to viem's default RPC.
+  const overrides: Partial<Record<SupportedChainKey, string | undefined>> = {
     baseSepolia: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL,
     base: process.env.NEXT_PUBLIC_BASE_RPC_URL,
     arbitrumSepolia: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL,
@@ -34,13 +37,21 @@ export function publicClientFor(key: SupportedChainKey) {
     xLayerTestnet: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL,
     arcTestnet: process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL,
     arc: process.env.NEXT_PUBLIC_ARC_RPC_URL,
-  }[key];
+    ethereum: process.env.NEXT_PUBLIC_ETHEREUM_RPC_URL,
+    ethereumSepolia: process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL,
+    optimism: process.env.NEXT_PUBLIC_OPTIMISM_RPC_URL,
+    optimismSepolia: process.env.NEXT_PUBLIC_OPTIMISM_SEPOLIA_RPC_URL,
+    arbitrum: process.env.NEXT_PUBLIC_ARBITRUM_RPC_URL,
+    polygon: process.env.NEXT_PUBLIC_POLYGON_RPC_URL,
+    polygonAmoy: process.env.NEXT_PUBLIC_POLYGON_AMOY_RPC_URL,
+  };
+  const rpcUrl = overrides[key];
   return createPublicClient({ chain, transport: http(rpcUrl) });
 }
 
 export async function deployTreasuryClone(key: SupportedChainKey, relayer: Address, token: Address) {
   const chain = getViemChain(key);
-  const factoryVariable = {
+  const factoryVariable: Partial<Record<SupportedChainKey, string>> = {
     baseSepolia: "NEXT_PUBLIC_BASE_SEPOLIA_FACTORY",
     base: "NEXT_PUBLIC_BASE_FACTORY",
     arbitrumSepolia: "NEXT_PUBLIC_ARBITRUM_SEPOLIA_FACTORY",
@@ -48,11 +59,13 @@ export async function deployTreasuryClone(key: SupportedChainKey, relayer: Addre
     xLayerTestnet: "NEXT_PUBLIC_X_LAYER_TESTNET_FACTORY",
     arcTestnet: "NEXT_PUBLIC_ARC_TESTNET_VAULT_FACTORY",
     arc: "NEXT_PUBLIC_ARC_VAULT_FACTORY",
-  } satisfies Record<SupportedChainKey, string>;
+  };
   if (SUPPORTED_CHAINS[key].executionBackend === "arc-vault") {
     throw new Error("Use deployAgentTreasuryVault for arc-vault chains; this factory deploys the legacy delegation treasury");
   }
-  const factoryAddress = process.env[factoryVariable[key]] as Address | undefined;
+  const variable = factoryVariable[key];
+  if (!variable) throw new Error(`${SUPPORTED_CHAINS[key].name} has no treasury factory configured`);
+  const factoryAddress = process.env[variable] as Address | undefined;
   if (!factoryAddress) throw new Error("Missing treasury factory address for selected chain");
   if (!window.ethereum) throw new Error("MetaMask is required");
 

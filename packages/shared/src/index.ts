@@ -1,5 +1,16 @@
 import { defineChain, type Abi, type Address, type Chain, type Hex, type TypedData } from "viem";
-import { arbitrumSepolia, base, baseSepolia } from "viem/chains";
+import {
+  arbitrum,
+  arbitrumSepolia,
+  base,
+  baseSepolia,
+  mainnet,
+  optimism,
+  optimismSepolia,
+  polygon,
+  polygonAmoy,
+  sepolia,
+} from "viem/chains";
 
 export type SupportedChainKey =
   | "baseSepolia"
@@ -8,7 +19,14 @@ export type SupportedChainKey =
   | "xLayer"
   | "xLayerTestnet"
   | "arcTestnet"
-  | "arc";
+  | "arc"
+  | "ethereum"
+  | "ethereumSepolia"
+  | "optimism"
+  | "optimismSepolia"
+  | "arbitrum"
+  | "polygon"
+  | "polygonAmoy";
 export type SupportedTokenSymbol = "USDC" | "OKB";
 
 /**
@@ -59,6 +77,14 @@ export interface ChainConfig {
   maxLogRange?: number;
   /** Minimum `maxFeePerGas` the mempool will accept, in wei. Arc enforces a 20 Gwei floor. */
   minMaxFeePerGas?: bigint;
+  /**
+   * True when the chain can receive a CCTP payment but can never hold a treasury.
+   *
+   * Treasury Copilot settles from Base/Arbitrum (ERC-7715) or Arc (vault). Every other CCTP
+   * chain is a payout destination only, and binding a policy to one must fail loudly rather
+   * than produce a policy that can never execute.
+   */
+  destinationOnly?: boolean;
 }
 
 /**
@@ -80,9 +106,12 @@ const CCTP_MAINNET = {
 /** CCTP domain ids, which are independent of EVM chain ids. */
 export const CCTP_DOMAIN = {
   ethereum: 0,
+  optimism: 2,
   arbitrum: 3,
   base: 6,
+  polygon: 7,
   arc: 26,
+  xLayer: 37,
 } as const;
 
 /** Arc's canonical USDC ERC-20 interface. Reports 6 decimals; native USDC gas uses 18. */
@@ -146,6 +175,38 @@ function token(symbol: SupportedTokenSymbol, address: Address | undefined, decim
   return { symbol, address, decimals, kind };
 }
 
+
+/**
+ * A CCTP payout destination that never holds a treasury.
+ *
+ * `executionBackend` is required by the type but meaningless here, so it is paired with
+ * `destinationOnly` and `settlementBackendForChainId` refuses these chains.
+ */
+function destinationChain(
+  key: SupportedChainKey,
+  name: string,
+  viemChain: Chain,
+  explorerUrl: string,
+  usdc: Address,
+  cctpDomain: number,
+  cctp: typeof CCTP_TESTNET | typeof CCTP_MAINNET,
+): ChainConfig {
+  return {
+    key,
+    name,
+    chainId: viemChain.id,
+    explorerUrl,
+    nativeSymbol: viemChain.nativeCurrency.symbol,
+    nativeDecimals: viemChain.nativeCurrency.decimals,
+    viemChain,
+    usdcAddress: usdc,
+    tokens: { USDC: token("USDC", usdc, 6) },
+    executionBackend: "delegated-7710",
+    destinationOnly: true,
+    cctp: { domain: cctpDomain, ...cctp },
+  };
+}
+
 export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   baseSepolia: {
     key: "baseSepolia",
@@ -201,6 +262,7 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeDecimals: 18,
     viemChain: xLayer,
     executionBackend: "delegated-7710",
+    cctp: { domain: CCTP_DOMAIN.xLayer, ...CCTP_MAINNET },
     usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_USDC_DECIMALS ?? 6)),
@@ -260,6 +322,36 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     maxLogRange: ARC_MAX_LOG_RANGE,
     minMaxFeePerGas: ARC_MIN_MAX_FEE_PER_GAS,
   },
+  // --- CCTP payout destinations -----------------------------------------------------------------
+  // Addresses and domains are Circle's published values; see docs/arc.md.
+  ethereum: destinationChain(
+    "ethereum", "Ethereum", mainnet, "https://etherscan.io",
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", CCTP_DOMAIN.ethereum, CCTP_MAINNET,
+  ),
+  ethereumSepolia: destinationChain(
+    "ethereumSepolia", "Ethereum Sepolia", sepolia, "https://sepolia.etherscan.io",
+    "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", CCTP_DOMAIN.ethereum, CCTP_TESTNET,
+  ),
+  optimism: destinationChain(
+    "optimism", "OP Mainnet", optimism, "https://optimistic.etherscan.io",
+    "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", CCTP_DOMAIN.optimism, CCTP_MAINNET,
+  ),
+  optimismSepolia: destinationChain(
+    "optimismSepolia", "OP Sepolia", optimismSepolia, "https://sepolia-optimism.etherscan.io",
+    "0x5fd84259d66Cd46123540766Be93DFE6D43130D7", CCTP_DOMAIN.optimism, CCTP_TESTNET,
+  ),
+  arbitrum: destinationChain(
+    "arbitrum", "Arbitrum One", arbitrum, "https://arbiscan.io",
+    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", CCTP_DOMAIN.arbitrum, CCTP_MAINNET,
+  ),
+  polygon: destinationChain(
+    "polygon", "Polygon PoS", polygon, "https://polygonscan.com",
+    "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", CCTP_DOMAIN.polygon, CCTP_MAINNET,
+  ),
+  polygonAmoy: destinationChain(
+    "polygonAmoy", "Polygon Amoy", polygonAmoy, "https://amoy.polygonscan.com",
+    "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", CCTP_DOMAIN.polygon, CCTP_TESTNET,
+  ),
 };
 
 export function chainById(chainId: number): ChainConfig | undefined {

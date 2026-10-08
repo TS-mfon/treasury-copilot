@@ -11,6 +11,7 @@ import {
   tokenForChainId,
   type SupportedTokenSymbol,
 } from "@treasury-copilot/shared";
+import { canSettleOnChain, settlementBackendForChainId, assertSettlementAvailable } from "@/lib/executionBackend";
 import { AGENT_API_KEY_TTL_SECONDS, issueAgentApiKey } from "@/lib/apiAuth";
 import {
   amountToUnits,
@@ -50,6 +51,8 @@ function parseBody(value: unknown) {
   const weeklyCap = body.weekly_cap ?? body.weeklyCap;
   const policyText = body.policy_text ?? body.policyText;
   const whitelist = body.whitelist ?? "";
+  const vault = body.vault ?? body.vault_address;
+  const destinationChains = body.destination_chains ?? body.destinationChains ?? "";
   const nonce = BigInt(String(body.nonce ?? "-1"));
   const deadline = BigInt(String(body.deadline ?? "0"));
   const signature = body.owner_signature ?? body.ownerSignature;
@@ -57,10 +60,24 @@ function parseBody(value: unknown) {
   if (typeof agent !== "string" || !isAddress(agent)) throw new Error("Invalid agent address");
   if (typeof delegatedAccount !== "string" || !isAddress(delegatedAccount)) throw new Error("Invalid delegated account");
   if (!Number.isInteger(chainId) || chainId <= 0) throw new Error("Invalid chain id");
-  if (chainId !== 84532) throw new Error("Unsupported chain: automatic execution is currently available only on Base Sepolia");
+  if (!canSettleOnChain(chainId)) throw new Error(`Chain ${chainId} cannot hold a treasury`);
+  const backend = settlementBackendForChainId(chainId);
+  if (backend === "delegated-7710" && chainId !== 84532) {
+    throw new Error("Unsupported chain: delegated execution is currently available only on Base Sepolia");
+  }
   if (tokenSymbol !== "USDC") throw new Error("Unsupported token: automatic execution currently supports USDC only");
   if (typeof permissionContext !== "string" || !isHex(permissionContext, { strict: true })) throw new Error("Invalid permission context");
   if (!delegationPayload || typeof delegationPayload !== "object") throw new Error("Invalid delegation payload");
+  // A vault-settled chain proves authority with a deployed vault instead of an ERC-7715 grant.
+  if (backend === "arc-vault") {
+    if (typeof vault !== "string" || !isAddress(vault)) {
+      throw new Error("A deployed agent treasury vault address is required for vault settlement");
+    }
+    if (vault.toLowerCase() !== String(delegatedAccount).toLowerCase()) {
+      throw new Error("The vault address must match the funding account being registered");
+    }
+  }
+  if (typeof destinationChains !== "string") throw new Error("destination_chains must be a comma-separated string");
   if (typeof policyText !== "string" || policyText.trim().length < 8) throw new Error("Policy text must be at least 8 characters");
   if (typeof whitelist !== "string") throw new Error("Whitelist must be a comma-separated string");
   if (nonce < 0n || deadline <= 0n) throw new Error("Owner authorization nonce and deadline are required");
@@ -70,6 +87,9 @@ function parseBody(value: unknown) {
     agent: agent as Address,
     delegatedAccount: delegatedAccount as Address,
     chainId,
+    settlementBackend: backend,
+    vault: backend === "arc-vault" ? (vault as Address) : undefined,
+    destinationChains: destinationChains.trim(),
     tokenSymbol,
     permissionContext: permissionContext as Hex,
     delegationPayload,
@@ -100,7 +120,7 @@ async function matchingPolicy(owner: Address, body: ReturnType<typeof parseBody>
     ) {
       const policyAddress = policy as Address;
       const state = await readPolicyState(policyAddress);
-      if (state.contract_version === "5") {
+      if (state.contract_version === "6") {
         return { policy: policyAddress, legacyPolicies };
       }
       legacyPolicies.push(policyAddress);
@@ -136,16 +156,22 @@ export async function POST(request: Request) {
     if (perTx > weekly) throw new Error("Per-request cap cannot exceed the weekly cap");
 
     const platform = platformAccount().address;
-    const validatedGrant = validateDelegationGrant(body.delegationPayload, {
-      owner,
-      platformDelegate: platform,
-      chainId: body.chainId,
-      token: token.address,
-      weeklyAllowanceAtto: weekly,
-      permissionContext: body.permissionContext,
-    });
-    if (validatedGrant.delegatedAccount.toLowerCase() !== body.delegatedAccount.toLowerCase()) {
-      throw new Error("Delegated account does not match the approved wallet grant");
+    const vaultSettled = body.settlementBackend === "arc-vault";
+    if (vaultSettled) {
+      // Refuse before any on-chain write when the deployment has Arc switched off.
+      assertSettlementAvailable(body.chainId);
+    } else {
+      const validatedGrant = validateDelegationGrant(body.delegationPayload, {
+        owner,
+        platformDelegate: platform,
+        chainId: body.chainId,
+        token: token.address,
+        weeklyAllowanceAtto: weekly,
+        permissionContext: body.permissionContext,
+      });
+      if (validatedGrant.delegatedAccount.toLowerCase() !== body.delegatedAccount.toLowerCase()) {
+        throw new Error("Delegated account does not match the approved wallet grant");
+      }
     }
     const serializedDelegation = canonicalJson(body.delegationPayload);
     const payloadHash = hashSetupActionPayload({
@@ -202,6 +228,9 @@ export async function POST(request: Request) {
         threshold,
         body.policyText,
         body.whitelist,
+        body.settlementBackend,
+        // The constructor treats "none" as an empty list and always permits the settlement chain.
+        body.destinationChains === "" ? "none" : body.destinationChains,
       ]);
       policy = deployment.address;
       await genlayerWrite(registry, "register_policy", [
@@ -235,19 +264,31 @@ export async function POST(request: Request) {
       ]);
     }
 
-    const delegationWrite = await genlayerWrite(policy, "register_delegation", [
-      serializedDelegation,
-      body.delegatedAccount,
-      token.address,
-      body.permissionContext,
-    ]);
+    const bindingWrite = vaultSettled
+      ? await genlayerWrite(policy, "register_vault", [body.vault as Address, token.address])
+      : await genlayerWrite(policy, "register_delegation", [
+          serializedDelegation,
+          body.delegatedAccount,
+          token.address,
+          body.permissionContext,
+        ]);
     const storedPolicy = await readPolicyState(policy);
-    assertStoredDelegation(storedPolicy as Record<string, unknown>, {
-      delegatedAccount: body.delegatedAccount,
-      token: token.address,
-      permissionContext: body.permissionContext,
-      serializedPayload: serializedDelegation,
-    });
+    if (vaultSettled) {
+      // Read the binding back; a vault that did not store is an unusable policy, not a warning.
+      if (storedPolicy.vault_registered !== true) {
+        throw new Error("The agent treasury vault did not register on the policy");
+      }
+      if (String(storedPolicy.vault_address ?? "").toLowerCase() !== String(body.vault).toLowerCase()) {
+        throw new Error("The stored vault address does not match the deployed vault");
+      }
+    } else {
+      assertStoredDelegation(storedPolicy as Record<string, unknown>, {
+        delegatedAccount: body.delegatedAccount,
+        token: token.address,
+        permissionContext: body.permissionContext,
+        serializedPayload: serializedDelegation,
+      });
+    }
 
     const binding = await genlayerRead<RegistryBinding>(registry, "get_policy", [policy]);
     const issuedAt = Math.floor(Date.now() / 1000);
@@ -278,8 +319,12 @@ export async function POST(request: Request) {
       token_symbol: token.symbol,
       token_decimals: token.decimals,
       deployment_tx_hash: deployment?.hash ?? null,
-      delegation_tx_hash: delegationWrite.hash,
-      delegation_registered: true,
+      delegation_tx_hash: bindingWrite.hash,
+      delegation_registered: !vaultSettled,
+      settlement_backend: body.settlementBackend,
+      vault_address: body.vault ?? null,
+      vault_registered: vaultSettled,
+      allowed_destination_chains: storedPolicy.allowed_destination_chains ?? [],
     });
   } catch (error) {
     return apiErrorResponse(error);

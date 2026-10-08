@@ -109,8 +109,10 @@ test("CCTP domains are distinct per chain and shared contracts match across chai
   );
 });
 
-test("X Layer has no CCTP config so cross-chain routes stay closed", () => {
-  assert.equal(SUPPORTED_CHAINS.xLayer.cctp, undefined);
+test("X Layer mainnet carries CCTP, its testnet does not", () => {
+  // Circle publishes X Layer at domain 37, so the mainnet route is open. No X Layer entry appears
+  // in Circle's testnet tables, so that one stays closed and must report no CCTP config.
+  assert.equal(SUPPORTED_CHAINS.xLayer.cctp?.domain, 37);
   assert.equal(SUPPORTED_CHAINS.xLayerTestnet.cctp, undefined);
 });
 

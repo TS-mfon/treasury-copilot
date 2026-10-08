@@ -12,13 +12,13 @@ import {
   SUPPORTED_CHAINS,
   type SupportedChainKey,
 } from "@treasury-copilot/shared";
-import { parseTokenAmount } from "@/lib/evm";
+import { deployAgentTreasuryVault, parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
 import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
 import { SetupProgressModal } from "@/components/SetupProgressModal";
 
-type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base">;
+type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base" | "arcTestnet">;
 
 type SetupResult = {
   policy: Address;
@@ -32,10 +32,16 @@ const delegationChains: Array<{
   executionAvailable: boolean;
 }> = [
   { key: "baseSepolia", executionAvailable: true },
+  // Arc settles through a vault the owner deploys, not an ERC-7715 delegation, because Arc has
+  // neither the MetaMask Delegation Framework nor 1Shot support.
+  { key: "arcTestnet", executionAvailable: true },
   { key: "base", executionAvailable: false },
 ];
 
 function operatorForChain(chainKey: DelegationChainKey) {
+  if (chainKey === "arcTestnet") {
+    return process.env.NEXT_PUBLIC_ARC_TESTNET_EXECUTOR_ADDRESS as Address | undefined;
+  }
   if (chainKey === "base") {
     return process.env.NEXT_PUBLIC_BASE_TREASURY_OPERATOR_ADDRESS as Address | undefined;
   }
@@ -64,8 +70,12 @@ export default function SetupPage() {
   const [isDelegating, setIsDelegating] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
+  const [vault, setVault] = useState<Address | null>(null);
+  const [destinationChains, setDestinationChains] = useState("");
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
+  // Arc proves settlement authority with a deployed vault instead of a wallet permission.
+  const vaultSettled = selectedChain.executionBackend === "arc-vault";
   const tokenConfig = selectedChain.tokens[tokenSymbol];
   const token = tokenConfig?.address;
   const availableConnectors = connectors.filter((connector, index, list) => (
@@ -139,27 +149,76 @@ export default function SetupPage() {
     }
   }
 
+  async function deployVault() {
+    setError("");
+    setSetupError("");
+    setSetupResult(null);
+    setApiKey("");
+    setIsDelegating(true);
+    try {
+      if (!address) throw new Error("Connect your wallet first");
+      if (!isAddress(effectiveAgent)) throw new Error("Enter a valid agent address");
+      if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
+      if (!platformDelegate || !isAddress(platformDelegate)) {
+        throw new Error(`The ${selectedChain.name} executor address is not configured`);
+      }
+
+      setStatus(`Deploying your agent treasury vault on ${selectedChain.name}...`);
+      const result = await deployAgentTreasuryVault(chainKey, platformDelegate as Address, token);
+      if (!result.vault || !isAddress(result.vault)) {
+        throw new Error("The vault was deployed but its address could not be read from the receipt");
+      }
+      setVault(result.vault);
+      setGrant(null);
+      setStatus("Vault deployed. Register it on the GenLayer policy so approved requests can settle.");
+    } catch (err) {
+      const message = friendlyError(err);
+      setError(message);
+      console.error("[deployVault] Arc vault deployment failed", {
+        cause: message,
+        chain: selectedChain.name,
+        chainId: selectedChain.chainId,
+        raw: err,
+      });
+    } finally {
+      setIsDelegating(false);
+    }
+  }
+
   async function registerDelegation() {
     setSetupError("");
     setSetupResult(null);
     setApiKey("");
     setIsRegistering(true);
     try {
-      if (!grant) throw new Error("Approve delegation first");
+      if (vaultSettled) {
+        if (!vault) throw new Error("Deploy your agent treasury vault first");
+      } else if (!grant) {
+        throw new Error("Approve delegation first");
+      }
       if (!address) throw new Error("Owner wallet is not connected");
+      if (!token) throw new Error(`${tokenSymbol} is not configured for ${selectedChain.name}`);
+
+      // A vault binding reuses the same signed-setup envelope as a delegation: the vault stands in
+      // for the funding account, the permission context is empty, and the payload names the vault.
+      const bindingAccount = vaultSettled ? (vault as Address) : grant!.delegatedAccount;
+      const bindingChainId = vaultSettled ? selectedChain.chainId : grant!.chainId;
+      const bindingToken = vaultSettled ? token : grant!.token;
+      const bindingContext = vaultSettled ? ("0x" as const) : grant!.permissionContext;
+      const bindingPayload: unknown = vaultSettled ? { vault } : grant!.raw;
       setStatus("Loading the current GenLayer registry nonce...");
       const setupChallenge = await fetch("/api/v1/setup");
       const challenge = await setupChallenge.json();
       if (!setupChallenge.ok) throw new Error(challenge.message ?? challenge.error ?? "Could not load setup authorization");
 
-      const serializedDelegation = canonicalJson(grant.raw);
+      const serializedDelegation = canonicalJson(bindingPayload);
       const payloadHash = hashSetupActionPayload({
         agent: effectiveAgent,
-        delegatedAccount: grant.delegatedAccount,
-        chainId: grant.chainId,
-        token: grant.token,
+        delegatedAccount: bindingAccount,
+        chainId: bindingChainId,
+        token: bindingToken,
         tokenSymbol,
-        permissionContext: grant.permissionContext,
+        permissionContext: bindingContext,
         serializedDelegation,
         perTxCapUnits: caps.perTxCapAtto,
         weeklyCapUnits: caps.weeklyCapAtto,
@@ -170,7 +229,7 @@ export default function SetupPage() {
       const nonce = BigInt(challenge.nonce);
       setStatus("Confirm the owner authorization in MetaMask.");
       const ownerSignature = await signTypedDataAsync({
-        domain: buildOwnerActionDomain(grant.chainId, challenge.registry as Address),
+        domain: buildOwnerActionDomain(bindingChainId, challenge.registry as Address),
         types: ownerActionTypes,
         primaryType: "OwnerAction",
         message: {
@@ -178,8 +237,8 @@ export default function SetupPage() {
           action: "setup_agent",
           policy: zeroAddress,
           agent: effectiveAgent,
-          chainId: BigInt(grant.chainId),
-          token: grant.token,
+          chainId: BigInt(bindingChainId),
+          token: bindingToken,
           payloadHash,
           nonce,
           deadline,
@@ -192,11 +251,12 @@ export default function SetupPage() {
         body: canonicalJson({
           owner: address,
           agent: effectiveAgent,
-          delegated_account: grant.delegatedAccount,
-          chain_id: grant.chainId,
+          delegated_account: bindingAccount,
+          chain_id: bindingChainId,
           token_symbol: tokenSymbol,
-          permission_context: grant.permissionContext,
-          delegation_payload: grant.raw,
+          permission_context: bindingContext,
+          delegation_payload: bindingPayload,
+          ...(vaultSettled ? { vault, destination_chains: destinationChains.trim() } : {}),
           per_tx_cap: perTxCap,
           weekly_cap: weeklyCap,
           whitelist,
@@ -288,6 +348,7 @@ export default function SetupPage() {
                 onChange={(event) => {
                   setChainKey(event.target.value as DelegationChainKey);
                   setGrant(null);
+                  setVault(null);
                   setError("");
                   setSetupError("");
                   setSetupResult(null);
@@ -323,12 +384,53 @@ export default function SetupPage() {
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-purple px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
             disabled={!executionAvailable || !isConnected || !isAddress(effectiveAgent) || isDelegating}
-            onClick={approveDelegation}
+            onClick={vaultSettled ? deployVault : approveDelegation}
           >
-            <WalletCards size={16} /> {isDelegating ? "Opening MetaMask..." : "Delegate weekly USDC"}
+            <WalletCards size={16} />{" "}
+            {isDelegating
+              ? (vaultSettled ? "Deploying vault..." : "Opening MetaMask...")
+              : (vaultSettled ? "Deploy agent treasury vault" : "Delegate weekly USDC")}
           </button>
 
-          {grant && (
+          {vaultSettled && (
+            <div className="mt-5 rounded-md border border-neutral-700 bg-neutral-900/60 p-4 text-sm text-neutral-300">
+              <p className="font-semibold text-neutral-100">{selectedChain.name} settles through a vault</p>
+              <p className="mt-2">
+                {selectedChain.name} has neither the MetaMask Delegation Framework nor 1Shot support, so
+                there is no wallet permission to sign. You deploy a treasury vault that you own, and name
+                the platform executor on it. You keep withdraw and pause authority; the executor can only
+                pay out requests GenLayer has already approved.
+              </p>
+            </div>
+          )}
+
+          {vaultSettled && (
+            <label className="mt-5 grid gap-2 text-sm font-medium">
+              Additional payout chains (optional)
+              <input
+                className="field"
+                placeholder="84532"
+                value={destinationChains}
+                onChange={(event) => setDestinationChains(event.target.value)}
+              />
+              <span className="text-xs font-normal text-neutral-400">
+                Comma-separated chain ids your agent may be paid on over CCTP. {selectedChain.name} is always
+                permitted. A destination outside this list is denied before policy review.
+              </span>
+            </label>
+          )}
+
+          {vault && vaultSettled && (
+            <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4 text-sm text-success">
+              <p className="font-semibold">Vault deployed</p>
+              <p className="mt-2 break-all text-neutral-300">{vault}</p>
+              <p className="mt-2 text-neutral-300">
+                Fund it with {tokenSymbol} on {selectedChain.name}, then register it below.
+              </p>
+            </div>
+          )}
+
+          {grant && !vaultSettled && (
             <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4 text-sm text-success">
               <p className="font-semibold">Delegation ready</p>
               <p className="mt-2 text-neutral-300">MetaMask approved the weekly USDC permission for this agent.</p>
@@ -365,11 +467,20 @@ export default function SetupPage() {
 
           <button
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-success px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            disabled={!grant || !isAddress(effectiveAgent) || isRegistering || Boolean(apiKey)}
+            disabled={
+              (vaultSettled ? !vault : !grant)
+              || !isAddress(effectiveAgent)
+              || isRegistering
+              || Boolean(apiKey)
+            }
             onClick={registerDelegation}
           >
             {isRegistering ? <LoaderCircle className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
-            {isRegistering ? "Registering on GenLayer..." : apiKey ? "Registration complete" : "Register delegation"}
+            {isRegistering
+              ? "Registering on GenLayer..."
+              : apiKey
+                ? "Registration complete"
+                : vaultSettled ? "Register vault" : "Register delegation"}
           </button>
 
           {status && <p className="mt-4 rounded-md border border-outline bg-surface-high p-3 text-sm text-neutral-200">{status}</p>}

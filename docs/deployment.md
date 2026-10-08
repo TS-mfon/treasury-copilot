@@ -489,6 +489,43 @@ genlayer write 0xPOLICY register_vault --args 0xARC_VAULT \
   0x3600000000000000000000000000000000000000
 ```
 
+### Registry registration: October 8, 2026
+
+The V6 Arc policy is registered and active in the production registry. Both keys matter here and
+they are different accounts:
+
+```text
+Registry gateway (registry owner, must sign registration):
+0x1072e78B72840BbC921493ea1C97dC5CAA54598F
+
+Owner and Arc policy deployer:
+0xEd9EDd8586b20524CafA4F568413C504C9B03172
+```
+
+The first attempt failed with `[EXPECTED] Only registry gateway` because the GenLayer CLI's active
+account was the owner, not the gateway. Import the gateway key and set it active before registering:
+
+```bash
+genlayer account import --name arc-registry-gateway --private-key "$GATEWAY_KEY"
+genlayer account use arc-registry-gateway
+genlayer write 0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9 register_policy --args \
+  0xOWNER 0xAGENT 0xPOLICY 5042002 0xARC_VAULT \
+  0x3600000000000000000000000000000000000000 USDC 6 <owner_nonce>
+```
+
+For an Arc binding the registry's funding-account slot holds the **vault address**, which is what
+`_require_active_registry_binding` compares against the policy. Reading the binding back confirms:
+
+```text
+policy=0x704345601942B0e7Ec503BFFD6FACA5f40D746E9
+chain=5042002
+vault=0xb121b87cf9e30293eb619b7ebc0554dfd3018cc2
+token=0x3600000000000000000000000000000000000000
+active=true
+```
+
+Verify with `npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts registry-binding`.
+
 ### Active V6 Arc deployment: October 7, 2026
 
 ```text
