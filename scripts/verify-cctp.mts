@@ -7,7 +7,8 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createPublicClient, http, keccak256, stringToHex, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, http, keccak256, stringToHex, type Address, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
 const ARC_TESTNET = 5042002;
 const ARC_MAINNET = 5042;
@@ -102,11 +103,48 @@ async function modeSettleCrossChain() {
     if (process.env[key] === undefined) process.env[key] = value;
   }
   const { executeArcVaultPayout } = await import("../apps/web/src/lib/arcVault.ts");
-  const { fetchAttestation, resolveRoute } = await import("../apps/web/src/lib/cctp.ts");
+  const { fetchAttestation, quoteFee, resolveRoute } = await import("../apps/web/src/lib/cctp.ts");
+  const { agentTreasuryAbi } = await import("@treasury-copilot/shared");
 
   const destinationChainId = 84532; // Base Sepolia
   const amount = 50_000n; // 0.05 USDC, enough to prove movement without draining the vault
   const requestId = keccak256(stringToHex(`cctp-gate-${Date.now()}`));
+
+  // Every cross-chain settlement consumes the vault's bounded fee reserve, so a gate that did not
+  // replenish it would succeed only a handful of times and then fail for a reason unrelated to the
+  // behaviour under test. Topping up is an ordinary owner action, and the contract's refusal to dip
+  // into principal is covered separately by the Solidity tests and the live revert checks.
+  const route = resolveRoute(ARC_TESTNET, destinationChainId);
+  const quote = await quoteFee(route, { forwarded: true });
+  const headroom = quote.maxFee * 4n;
+
+  const arcRpc = process.env.ARC_TESTNET_RPC_URL ?? process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL;
+  const arcClient = createPublicClient({ transport: http(arcRpc ?? ARC_RPC) });
+  const at = { address: SMOKE_VAULT, abi: agentTreasuryAbi } as const;
+  const reserve = await arcClient.readContract({ ...at, functionName: "feeReserve" }) as bigint;
+
+  if (reserve < quote.maxFee) {
+    const ownerKey = process.env.AGENT_SIGNER_PRIVATE_KEY;
+    if (!ownerKey) {
+      failures.push(`vault fee reserve is ${reserve} but the fee needs ${quote.maxFee}, and no owner key is available to top it up`);
+      return;
+    }
+    const owner = privateKeyToAccount(`0x${ownerKey.replace(/^0x/, "")}` as Hex);
+    const { SUPPORTED_CHAINS } = await import("@treasury-copilot/shared");
+    const chain = SUPPORTED_CHAINS.arcTestnet.viemChain;
+    const wallet = createWalletClient({ account: owner, chain, transport: http(arcRpc ?? ARC_RPC) });
+    const cap = await arcClient.readContract({ ...at, functionName: "feeReserveCap" }) as bigint;
+    const target = reserve + headroom;
+    if (cap < target) {
+      const raise = await wallet.writeContract({ ...at, chain, functionName: "setFeeReserveCap", args: [target] });
+      await arcClient.waitForTransactionReceipt({ hash: raise });
+    }
+    const fund = await wallet.writeContract({ ...at, chain, functionName: "fundFeeReserve", args: [headroom] });
+    await arcClient.waitForTransactionReceipt({ hash: fund });
+    const topped = await arcClient.readContract({ ...at, functionName: "feeReserve" }) as bigint;
+    check(topped >= quote.maxFee, `fee reserve is still ${topped} after top-up, need ${quote.maxFee}`);
+    console.log(`topped up fee reserve ${reserve} -> ${topped} (fee ${quote.maxFee})`);
+  }
 
   const result = await executeArcVaultPayout({
     chainId: ARC_TESTNET,
@@ -122,7 +160,6 @@ async function modeSettleCrossChain() {
   check(/^0x[0-9a-f]{64}$/i.test(result.tx_hash), `invalid burn tx hash ${result.tx_hash}`);
 
   // The burn is not the payee's receipt: poll Circle until it has minted on the destination.
-  const route = resolveRoute(ARC_TESTNET, destinationChainId);
   let destinationTx: Hex | undefined;
   for (let attempt = 0; attempt < 40 && !destinationTx; attempt += 1) {
     const status = await fetchAttestation(route, result.tx_hash);
