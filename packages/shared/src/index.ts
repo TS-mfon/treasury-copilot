@@ -354,6 +354,24 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   ),
 };
 
+/**
+ * Every chain an approved payment can be delivered to from a given settlement chain.
+ *
+ * Restricted to chains sharing the settlement chain's Circle environment, because a route whose
+ * endpoints straddle the sandbox and production attestation services would never be attested. This
+ * is the default destination set for a new policy: the agent picks the network per request, and the
+ * owner constrains it through policy text and the on-chain review rather than a hand-kept list.
+ */
+export function cctpDestinationChainIds(settlementChainId: number): number[] {
+  const settlement = chainById(settlementChainId);
+  if (!settlement?.cctp) return [];
+  const host = settlement.cctp.attestationApiUrl;
+  return Object.values(SUPPORTED_CHAINS)
+    .filter((chain) => chain.cctp?.attestationApiUrl === host)
+    .map((chain) => chain.chainId)
+    .sort((a, b) => a - b);
+}
+
 export function chainById(chainId: number): ChainConfig | undefined {
   return Object.values(SUPPORTED_CHAINS).find((chain) => chain.chainId === chainId);
 }

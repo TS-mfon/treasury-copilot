@@ -6,6 +6,7 @@ import { useAccount, useSignTypedData } from "wagmi";
 import { Ban, Clipboard, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { formatUnits, isAddress, type Address } from "viem";
 import { buildOwnerActionDomain, ownerActionTypes } from "@treasury-copilot/shared";
+import { useEnsureChain } from "@/lib/useEnsureChain";
 import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { friendlyError } from "@/lib/errors";
@@ -31,6 +32,7 @@ interface PolicyRow {
 }
 
 export default function DashboardPage() {
+  const ensureChain = useEnsureChain();
   const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
@@ -63,6 +65,8 @@ export default function DashboardPage() {
       const registry = process.env.NEXT_PUBLIC_GENLAYER_REGISTRY;
       if (!registry || !isAddress(registry)) throw new Error("Treasury registry is not configured");
       const signedAction = action === "revoke" ? "revoke_agent_key" : "rotate_agent_key";
+      // The domain below is bound to the policy's own chain, so the wallet must be there first.
+      await ensureChain(Number(row.binding.chain_id));
       const nonce = BigInt(row.binding.api_key_version);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
       const payloadHash = hashActionPayload([signedAction, row.policy.toLowerCase(), nonce.toString()]);

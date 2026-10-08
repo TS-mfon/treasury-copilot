@@ -104,8 +104,15 @@ export default function DocsPage() {
   "category": "api_subscription",
   "justification": "Monthly API renewal invoice #4471",
   "idempotency_key": "billing-4471-2026-07",
+  "destination_chain": 84532,
   "evidence": []
 }`}</pre>
+          <p className="mt-3 text-sm text-neutral-400">
+            <span className="font-mono">destination_chain</span> is optional. Omit it to settle on your
+            treasury&apos;s own chain. Supply any chain Circle supports and the payment is bridged there over
+            CCTP. An unsupported chain id is refused immediately, and one <span className="font-mono">idempotency_key</span> cannot
+            be replayed with a different destination.
+          </p>
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Response</h3>
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{`{
   "request_id": "0x...",
@@ -123,7 +130,15 @@ export default function DocsPage() {
     "tx_hash": "",
     "explorer_url": null,
     "created_at": "2026-07-21T12:10:00.000Z",
-    "updated_at": "2026-07-21T12:11:00.000Z"
+    "updated_at": "2026-07-21T12:11:00.000Z",
+    "route": "direct",
+    "destination_chain": { "chain_id": 84532, "name": "Base Sepolia" },
+    "bridge": {
+      "tx_hash": "",
+      "attestation_status": "",
+      "destination_tx_hash": "",
+      "destination_explorer_url": null
+    }
   },
   "chain": {
     "chain_id": 84532,
@@ -137,6 +152,91 @@ export default function DocsPage() {
 }`}</pre>
           <p className="mt-4 text-sm text-neutral-400">
             The response includes <span className="font-mono">Location</span> and <span className="font-mono">Retry-After: 10</span>. Poll until the request reaches <span className="font-mono">denied</span>, <span className="font-mono">executed</span>, or a retryable <span className="font-mono">failed</span> state.
+          </p>
+        </section>
+
+        <section className="panel rounded-lg p-6">
+          <h2 className="text-xl font-semibold">Networks and settlement</h2>
+          <p className="mt-2 text-neutral-400">
+            A treasury settles one of two ways, decided by the chain it is bound to. You never choose the
+            mechanism; the chain does.
+          </p>
+          <div className="mt-4 overflow-auto">
+            <table className="w-full min-w-[34rem] text-left text-sm">
+              <thead className="text-neutral-400">
+                <tr>
+                  <th className="pb-2 pr-4 font-medium">Chain</th>
+                  <th className="pb-2 pr-4 font-medium">How it settles</th>
+                  <th className="pb-2 font-medium">What you hold</th>
+                </tr>
+              </thead>
+              <tbody className="align-top text-neutral-300">
+                <tr>
+                  <td className="py-2 pr-4 font-mono text-xs">Base Sepolia</td>
+                  <td className="py-2 pr-4">ERC-7715 permission relayed by 1Shot</td>
+                  <td className="py-2">USDC in your own smart account</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-mono text-xs">Arc Testnet</td>
+                  <td className="py-2 pr-4">An agent treasury vault you deploy and own</td>
+                  <td className="py-2">USDC in the vault; you keep withdraw and pause</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-4 text-sm text-neutral-400">
+            Arc has neither the MetaMask Delegation Framework nor 1Shot support, so there is no wallet
+            permission to sign there. Instead you deploy a vault and name the platform executor on it. The
+            executor can only pay out a request GenLayer has already approved, and it can never withdraw.
+          </p>
+
+          <h3 className="mt-8 text-sm font-semibold text-neutral-300">Paying on another network</h3>
+          <p className="mt-2 text-neutral-400">
+            Fund your treasury on whichever network suits you. Your agent then asks to be paid on whichever
+            network suits it, per request, and Circle CCTP moves the money. A new policy permits every chain
+            in its own Circle environment, so you do not keep a list.
+          </p>
+          <div className="mt-4 overflow-auto">
+            <table className="w-full min-w-[30rem] text-left text-sm">
+              <thead className="text-neutral-400">
+                <tr>
+                  <th className="pb-2 pr-4 font-medium">Testnet destination</th>
+                  <th className="pb-2 pr-4 font-medium">Chain id</th>
+                  <th className="pb-2 font-medium">CCTP domain</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono text-xs text-neutral-300">
+                <tr><td className="py-1.5 pr-4">Ethereum Sepolia</td><td className="py-1.5 pr-4">11155111</td><td className="py-1.5">0</td></tr>
+                <tr><td className="py-1.5 pr-4">OP Sepolia</td><td className="py-1.5 pr-4">11155420</td><td className="py-1.5">2</td></tr>
+                <tr><td className="py-1.5 pr-4">Arbitrum Sepolia</td><td className="py-1.5 pr-4">421614</td><td className="py-1.5">3</td></tr>
+                <tr><td className="py-1.5 pr-4">Base Sepolia</td><td className="py-1.5 pr-4">84532</td><td className="py-1.5">6</td></tr>
+                <tr><td className="py-1.5 pr-4">Polygon Amoy</td><td className="py-1.5 pr-4">80002</td><td className="py-1.5">7</td></tr>
+                <tr><td className="py-1.5 pr-4">Arc Testnet</td><td className="py-1.5 pr-4">5042002</td><td className="py-1.5">26</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-4 text-sm text-neutral-400">
+            A testnet shares its mainnet CCTP domain, so a domain alone does not identify a chain. Mixing a
+            testnet and a mainnet endpoint is refused outright rather than attempted, because Circle would
+            never attest such a transfer. CCTP deducts its fee from the amount it moves, so the treasury
+            burns the approved amount plus the fee and the payee receives exactly what the policy approved.
+          </p>
+
+          <h3 className="mt-8 text-sm font-semibold text-neutral-300">POST /api/owner/fund-arc</h3>
+          <p className="mt-2 text-neutral-400">
+            Owner session required. Returns the two transactions you sign in your own wallet to move USDC
+            from any supported chain into your vault: an approval and a CCTP burn whose mint recipient is the
+            vault. The platform never holds authority over your source-chain USDC.
+          </p>
+          <pre className="terminal mt-3 overflow-auto p-4 text-xs">{`{
+  "source_chain": 11155111,
+  "vault": "0xYourVault",
+  "amount": "5000000"
+}`}</pre>
+          <p className="mt-3 text-sm text-neutral-400">
+            <span className="font-mono">amount</span> is in USDC base units and is what the vault receives.
+            The response adds the CCTP fee on top as <span className="font-mono">total_amount_units</span>,
+            which is what you actually burn.
           </p>
         </section>
 
@@ -187,6 +287,7 @@ export default function DocsPage() {
               ["denied", "A deterministic guard or comparative review rejected the request."],
               ["ready", "The approved finalized request is ready for 1Shot."],
               ["executing", "The platform holds the on-chain execution lease."],
+              ["bridging", "A cross-chain payment was burned and is awaiting Circle's mint on the destination."],
               ["failed", "The lease is released and the request can retry."],
               ["executed", "The confirmed EVM transaction hash is recorded."],
               ["not_applicable", "Execution does not apply, normally because the request was denied."],
@@ -202,6 +303,13 @@ export default function DocsPage() {
           </p>
           <p className="mt-3 text-sm text-neutral-400">
             An identical replay returns <span className="font-mono">idempotent_replay: true</span>, the same request ID, and the same Base transaction hash without another payment.
+          </p>
+          <p className="mt-3 text-sm text-neutral-400">
+            A cross-chain payment passes through <span className="font-mono">bridging</span>, and only reaches{" "}
+            <span className="font-mono">executed</span> once Circle has minted on the destination chain. The
+            burn alone is not the payee&apos;s receipt, so treat the destination hash in{" "}
+            <span className="font-mono">bridge.destination_tx_hash</span> as the confirmation. The same{" "}
+            <span className="font-mono">request_id</span> can never be both paid locally and bridged.
           </p>
         </section>
 

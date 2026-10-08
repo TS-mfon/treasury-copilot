@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { NextResponse } from "next/server";
 import { SUPPORTED_CHAINS } from "@treasury-copilot/shared";
 import { arcSettlementEnabled } from "@/lib/executionBackend";
@@ -26,8 +28,35 @@ function arcStatus(): string {
   return missing.length === 0 ? "configured" : `missing:${missing.join("+")}`;
 }
 
+/**
+ * Whether the GenLayer policy source ships with this deployment.
+ *
+ * deployTreasuryPolicy reads contracts/genlayer/TreasuryPolicy.py at runtime. When that file is
+ * missing, owner setup fails with "Could not load TreasuryPolicy.py" and nothing before that point
+ * reveals the problem, so it is surfaced here.
+ */
+async function policySourceStatus(): Promise<string> {
+  const candidates = [
+    path.resolve(process.cwd(), "contracts/genlayer/TreasuryPolicy.py"),
+    path.resolve(process.cwd(), "../../contracts/genlayer/TreasuryPolicy.py"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const source = await readFile(candidate, "utf8");
+      // A truncated or wrong file is as broken as a missing one, so check it declares a version.
+      return /"contract_version":\s*"(\d+)"/.exec(source)?.[1]
+        ? `v${/"contract_version":\s*"(\d+)"/.exec(source)?.[1]}`
+        : "unversioned";
+    } catch {
+      continue;
+    }
+  }
+  return "missing";
+}
+
 export async function GET() {
   const mongodb = await pilotStoreHealth();
+  const policySource = await policySourceStatus();
   const arc = arcStatus();
   const checks = {
     application: "healthy",
@@ -37,6 +66,7 @@ export async function GET() {
     base_sepolia: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL ? "configured" : "default_chain_rpc",
     one_shot: process.env.ONE_SHOT_RELAYER_URL || process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL ? "configured" : "missing",
     arc_testnet: arc,
+    policy_source: policySource,
   } as const;
   const healthy = Object.values(checks).every(
     (value) => value !== "missing" && value !== "unavailable" && !value.startsWith("missing:"),

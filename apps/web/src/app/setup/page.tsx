@@ -15,6 +15,7 @@ import {
 import { deployAgentTreasuryVault, parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
+import { useEnsureChain } from "@/lib/useEnsureChain";
 import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
 import { SetupProgressModal } from "@/components/SetupProgressModal";
 
@@ -52,6 +53,7 @@ function operatorForChain(chainKey: DelegationChainKey) {
 }
 
 export default function SetupPage() {
+  const ensureChain = useEnsureChain();
   const { address, connector, isConnected } = useAccount();
   const { connect, connectors, error: connectError, isPending: isConnecting } = useConnect();
   const { signTypedDataAsync } = useSignTypedData();
@@ -71,7 +73,6 @@ export default function SetupPage() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
   const [vault, setVault] = useState<Address | null>(null);
-  const [destinationChains, setDestinationChains] = useState("");
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
   // Arc proves settlement authority with a deployed vault instead of a wallet permission.
@@ -123,6 +124,7 @@ export default function SetupPage() {
       const walletProvider = await connector?.getProvider();
       if (!walletProvider) throw new Error("The connected MetaMask provider is unavailable. Reconnect the wallet and retry.");
 
+      await ensureChain(selectedChain.chainId);
       setStatus(`Confirming ${selectedChain.name}, inspecting wallet capabilities, then opening the permission request...`);
       const result = await requestWeeklyUsdcDelegation({
         owner: ownerAddress,
@@ -163,6 +165,7 @@ export default function SetupPage() {
         throw new Error(`The ${selectedChain.name} executor address is not configured`);
       }
 
+      await ensureChain(selectedChain.chainId);
       setStatus(`Deploying your agent treasury vault on ${selectedChain.name}...`);
       const result = await deployAgentTreasuryVault(chainKey, platformDelegate as Address, token);
       if (!result.vault || !isAddress(result.vault)) {
@@ -227,6 +230,8 @@ export default function SetupPage() {
       });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
       const nonce = BigInt(challenge.nonce);
+      // The domain below is bound to the binding chain, so the wallet must be there first.
+      await ensureChain(bindingChainId);
       setStatus("Confirm the owner authorization in MetaMask.");
       const ownerSignature = await signTypedDataAsync({
         domain: buildOwnerActionDomain(bindingChainId, challenge.registry as Address),
@@ -256,7 +261,7 @@ export default function SetupPage() {
           token_symbol: tokenSymbol,
           permission_context: bindingContext,
           delegation_payload: bindingPayload,
-          ...(vaultSettled ? { vault, destination_chains: destinationChains.trim() } : {}),
+          ...(vaultSettled ? { vault } : {}),
           per_tx_cap: perTxCap,
           weekly_cap: weeklyCap,
           whitelist,
@@ -401,23 +406,12 @@ export default function SetupPage() {
                 the platform executor on it. You keep withdraw and pause authority; the executor can only
                 pay out requests GenLayer has already approved.
               </p>
+              <p className="mt-3">
+                Fund the vault from whichever network suits you, and your agent asks to be paid on
+                whichever network suits it. Every chain Circle supports is available as a destination, and
+                your policy text still governs whether a given payment is appropriate.
+              </p>
             </div>
-          )}
-
-          {vaultSettled && (
-            <label className="mt-5 grid gap-2 text-sm font-medium">
-              Additional payout chains (optional)
-              <input
-                className="field"
-                placeholder="84532"
-                value={destinationChains}
-                onChange={(event) => setDestinationChains(event.target.value)}
-              />
-              <span className="text-xs font-normal text-neutral-400">
-                Comma-separated chain ids your agent may be paid on over CCTP. {selectedChain.name} is always
-                permitted. A destination outside this list is denied before policy review.
-              </span>
-            </label>
           )}
 
           {vault && vaultSettled && (
