@@ -140,6 +140,53 @@ Testnet uses the sandbox host `https://iris-api-sandbox.circle.com`; mainnet use
   `messages[0].forwardTxHash` once a forwarded transfer has been minted. A `404` means the message
   is not yet indexed and should be retried.
 
+## CCTP payout destinations
+
+An approved payment can be delivered to any chain Circle supports, out of the Arc vault. These
+chains are payout destinations only: they can receive a mint but never hold a treasury, so
+`settlementBackendForChainId` refuses them and a policy cannot be bound to one.
+
+| Chain | Chain id | CCTP domain | USDC |
+| --- | --- | --- | --- |
+| Ethereum | 1 | 0 | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
+| Ethereum Sepolia | 11155111 | 0 | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| OP Mainnet | 10 | 2 | `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85` |
+| OP Sepolia | 11155420 | 2 | `0x5fd84259d66Cd46123540766Be93DFE6D43130D7` |
+| Arbitrum One | 42161 | 3 | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| Polygon PoS | 137 | 7 | `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` |
+| Polygon Amoy | 80002 | 7 | `0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582` |
+| X Layer | 196 | 37 | `0xB6CEceAB302E2E4948951eE7843FC24E92933061` |
+
+A testnet shares its mainnet domain, so the domain alone does not identify a chain. The attestation
+host is what separates them, and a route whose endpoints disagree on that host is refused outright
+rather than burned — Circle would never attest it.
+
+X Layer's testnet does not appear in Circle's published testnet tables, so it carries no CCTP
+configuration and its cross-chain routes stay closed.
+
+## How a cross-chain payment runs
+
+1. The agent submits a request naming a `destination_chain`.
+2. GenLayer checks the destination against the owner's allowlist. A destination outside it is a
+   deterministic denial recorded before any policy review runs.
+3. On approval, the executor quotes the fee from Circle's live endpoint and calls
+   `payoutCrossChain`, burning principal plus `maxFee` so the deduction still leaves the payee
+   whole. The fee comes from the vault's bounded reserve, never the approved principal.
+4. The burn is recorded as a bridge initiation, not an execution — the payee has not been credited.
+5. The cron bridge stage polls the attestation and closes the request only once Circle reports the
+   destination mint. A request that already carries a destination transaction is a no-op, so a
+   duplicate worker cannot double-record.
+
+Verified end to end: `npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts settle-cross-chain`
+burns on Arc through the application's own executor and asserts the destination mint credited the
+payee exactly the principal.
+
+## Inbound funding
+
+`POST /api/owner/fund-arc` returns the approval and `depositForBurn` calldata for the owner to sign
+in their own wallet. The platform never holds authority over the owner's source-chain USDC, and with
+the Forwarding Service the owner signs only on the source chain.
+
 ## Gateway
 
 Gateway is deployed on Arc, so unified USDC balances are available.

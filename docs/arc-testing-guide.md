@@ -189,34 +189,92 @@ immediately with a clear error. Replaying the same `idempotency_key` with a diff
 response carries `route`, `destination_chain` and a `bridge` object with the burn hash, attestation
 status and destination mint hash.
 
-## What does not work yet
+## Test 9: pay out to another chain
 
-**Test 8 needs one more step: registry registration.**
-
-An Arc-bound V6 policy is deployed and its vault is registered:
-
-```text
-Policy:  0x704345601942B0e7Ec503BFFD6FACA5f40D746E9
-Vault:   0xB121B87cF9e30293eb619B7eBC0554dfd3018CC2
-```
-
-You can read it yourself:
+With an Arc-bound policy registered, name any CCTP-supported chain in the request:
 
 ```bash
-genlayer call 0x704345601942B0e7Ec503BFFD6FACA5f40D746E9 get_policy
-# contract_version: '6', settlement_backend: 'arc-vault', vault_registered: true,
-# allowed_destination_chains: [ '5042002', '84532' ]
+curl -X POST https://treasurycopilot.app/api/v1/spend \
+  -H "authorization: Bearer $AGENT_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "agent": "0xYOUR_AGENT",
+    "recipient": "0xPAYEE",
+    "amount": "1.00",
+    "category": "infrastructure",
+    "justification": "monthly observability invoice",
+    "idempotency_key": "inv-2026-10-009",
+    "destination_chain": 84532
+  }'
 ```
 
-What is missing is registration in the production registry. `queue_request` calls
-`_require_active_registry_binding`, and registration requires the registry gateway key, which is the
-platform signer. The application performs that server-side during owner setup, so the route to a
-live Arc agent binding is to run owner setup against Arc rather than to deploy anything further.
+Poll `/api/v1/requests/:id`. A cross-chain request moves through `route: "cctp"` with
+`execution_status` going `executing` → `bridging` → `executed`, and the `bridge` object filling in
+the burn hash, then the attestation status, then the destination mint hash. The request is only
+`executed` once Circle has minted, because the burn alone is not the payee's receipt.
 
-So today: the Arc contract, the executor, the routing, direct Arc settlement, CCTP cross-chain
-settlement, and the V6 policy with its vault binding are all live and verifiable. Tests 1 through 7
-exercise real production code; none of them is a mock. Test 8 needs that one registration step
-before an agent API key can target Arc.
+Supported destinations and their CCTP domains are listed in [docs/arc.md](arc.md). Payable testnet
+chains are Arc Testnet (26), Base Sepolia (6), Arbitrum Sepolia (3), Ethereum Sepolia (0),
+OP Sepolia (2) and Polygon Amoy (7).
 
-Arc Mainnet is deliberately off. It needs a separate registry, gateway key, reporter key, executor
-key, API secrets, cron worker, feature flags, and a contract security review first.
+To drive the whole thing yourself without the agent API:
+
+```bash
+npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts settle-cross-chain
+```
+
+That burns on Arc through the application's own executor, polls Circle, and asserts the destination
+mint credited the payee **exactly** the principal. It prints both hashes.
+
+## Test 10: fund the Arc vault from another chain
+
+```bash
+curl -X POST https://treasurycopilot.app/api/owner/fund-arc \
+  -H "content-type: application/json" \
+  --cookie "$OWNER_SESSION_COOKIE" \
+  -d '{"source_chain": 11155111, "vault": "0xb121b87cf9e30293eb619b7ebc0554dfd3018cc2", "amount": "5000000"}'
+```
+
+It returns two transactions for you to sign in your own wallet — an approval and a
+`depositForBurn` whose mint recipient is the vault. The platform never touches your source-chain
+USDC. `total_amount_units` is the principal plus the CCTP fee, so the vault receives the full
+`amount_units`. An unsupported source chain is refused with the exact stage named.
+
+## Test 11: Gateway and chain configuration
+
+```bash
+npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts gateway
+npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts registry
+npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts registry-binding
+npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts mainnet-off
+```
+
+`gateway` reads contract code on Arc rather than trusting config, and checks a chain with no Gateway
+deployment reports `not-deployed` instead of a false positive. `registry` asks Circle's live fee
+service to confirm every Arc route the registry claims, and reads Arc USDC's decimals on chain.
+`registry-binding` confirms the Arc policy is active in the production registry with the vault in
+the funding slot. `mainnet-off` confirms Arc mainnet is still disabled.
+
+## Test 12: set up your own Arc agent
+
+Open [the setup page](https://treasurycopilot.app/setup), connect your wallet, and pick **Arc
+Testnet**. Instead of a MetaMask permission request you get **Deploy agent treasury vault** — you
+deploy a vault you own and the platform executor is named on it. Optionally list additional payout
+chain ids. Then **Register vault** to deploy the V6 policy, register it, bind the vault and receive
+an agent API key.
+
+You keep withdraw and pause authority on the vault. The executor can only pay out requests GenLayer
+has already approved, which you can confirm with the read-only reverts in Test 5.
+
+## What does not work yet
+
+**Arc Mainnet is deliberately off.** It needs a separate registry, gateway key, reporter key,
+executor key, API secrets, cron worker, feature flags, and a contract security review first. The
+`mainnet-off` check above exists to keep it that way.
+
+**The GenLayer policy allowlist is permissive by default.** `ALLOWED_GENLAYER_POLICY_ADDRESSES` is
+now genuinely enforced, but an empty list still means unrestricted so existing deployments keep
+working. Set it to the policies you expect if you want it to bite.
+
+Everything else in Tests 1 through 12 exercises real production code against live networks. None of
+it is a mock.
