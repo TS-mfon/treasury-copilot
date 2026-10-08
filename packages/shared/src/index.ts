@@ -1,8 +1,54 @@
 import { defineChain, type Abi, type Address, type Chain, type Hex, type TypedData } from "viem";
-import { arbitrumSepolia, base, baseSepolia } from "viem/chains";
+import {
+  arbitrum,
+  arbitrumSepolia,
+  base,
+  baseSepolia,
+  mainnet,
+  optimism,
+  optimismSepolia,
+  polygon,
+  polygonAmoy,
+  sepolia,
+} from "viem/chains";
 
-export type SupportedChainKey = "baseSepolia" | "base" | "arbitrumSepolia" | "xLayer" | "xLayerTestnet";
+export type SupportedChainKey =
+  | "baseSepolia"
+  | "base"
+  | "arbitrumSepolia"
+  | "xLayer"
+  | "xLayerTestnet"
+  | "arcTestnet"
+  | "arc"
+  | "ethereum"
+  | "ethereumSepolia"
+  | "optimism"
+  | "optimismSepolia"
+  | "arbitrum"
+  | "polygon"
+  | "polygonAmoy";
 export type SupportedTokenSymbol = "USDC" | "OKB";
+
+/**
+ * How an approved payout actually reaches the chain.
+ *
+ * `delegated-7710` redelegates the owner's ERC-7715 MetaMask permission to the 1Shot relayer,
+ * which moves USDC out of the owner's smart account. It requires the MetaMask Delegation
+ * Framework and a 1Shot capability entry on the target chain.
+ *
+ * `arc-vault` calls `payout` on an AgentTreasury contract the owner deployed, signed by the
+ * platform's dedicated Arc executor. Arc has neither the delegation framework nor 1Shot support,
+ * so it settles this way.
+ */
+export type ExecutionBackend = "delegated-7710" | "arc-vault";
+
+/** Circle CCTP V2 wiring. Addresses are deterministic and identical across chains. */
+export interface CctpConfig {
+  domain: number;
+  tokenMessenger: Address;
+  messageTransmitter: Address;
+  attestationApiUrl: string;
+}
 
 export interface TokenConfig {
   symbol: SupportedTokenSymbol;
@@ -17,10 +63,89 @@ export interface ChainConfig {
   chainId: number;
   explorerUrl: string;
   nativeSymbol: string;
+  /** Decimals of the chain's gas asset. On Arc the gas asset is native USDC at 18 decimals. */
+  nativeDecimals: number;
   viemChain: Chain;
   usdcAddress: Address | undefined;
   tokens: Partial<Record<SupportedTokenSymbol, TokenConfig>>;
+  executionBackend: ExecutionBackend;
+  /** Undefined when CCTP does not support the chain, which disables cross-chain routes. */
+  cctp?: CctpConfig;
+  /** AgentTreasuryFactory, only meaningful for `arc-vault` chains. */
+  vaultFactory?: Address;
+  /** Max blocks per `eth_getLogs` call. Arc's public endpoints cap this at 9,999. */
+  maxLogRange?: number;
+  /** Minimum `maxFeePerGas` the mempool will accept, in wei. Arc enforces a 20 Gwei floor. */
+  minMaxFeePerGas?: bigint;
+  /**
+   * True when the chain can receive a CCTP payment but can never hold a treasury.
+   *
+   * Treasury Copilot settles from Base/Arbitrum (ERC-7715) or Arc (vault). Every other CCTP
+   * chain is a payout destination only, and binding a policy to one must fail loudly rather
+   * than produce a policy that can never execute.
+   */
+  destinationOnly?: boolean;
 }
+
+/**
+ * CCTP V2 contract addresses. See docs/arc.md for provenance; these are protocol constants
+ * deployed at the same address on every supported chain, so they are not environment-configured.
+ */
+const CCTP_TESTNET = {
+  tokenMessenger: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA" as Address,
+  messageTransmitter: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275" as Address,
+  attestationApiUrl: "https://iris-api-sandbox.circle.com",
+} as const;
+
+const CCTP_MAINNET = {
+  tokenMessenger: "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d" as Address,
+  messageTransmitter: "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64" as Address,
+  attestationApiUrl: "https://iris-api.circle.com",
+} as const;
+
+/** CCTP domain ids, which are independent of EVM chain ids. */
+export const CCTP_DOMAIN = {
+  ethereum: 0,
+  optimism: 2,
+  arbitrum: 3,
+  base: 6,
+  polygon: 7,
+  arc: 26,
+  xLayer: 37,
+} as const;
+
+/** Arc's canonical USDC ERC-20 interface. Reports 6 decimals; native USDC gas uses 18. */
+export const ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000" as Address;
+
+/** Arc rejects transactions below a 20 Gwei maxFeePerGas. */
+export const ARC_MIN_MAX_FEE_PER_GAS = 20_000_000_000n;
+
+/** Arc public RPC endpoints cap `eth_getLogs` at 9,999 blocks per call. */
+export const ARC_MAX_LOG_RANGE = 9_999;
+
+export const arcTestnet = defineChain({
+  id: 5042002,
+  name: "Arc Testnet",
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  rpcUrls: {
+    default: { http: [process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL ?? "https://rpc.testnet.arc.io"] },
+  },
+  blockExplorers: {
+    default: { name: "Arc Explorer", url: "https://explorer.testnet.arc.io" },
+  },
+});
+
+export const arc = defineChain({
+  id: 5042,
+  name: "Arc",
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  rpcUrls: {
+    default: { http: [process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.mainnet.arc.io"] },
+  },
+  blockExplorers: {
+    default: { name: "Arc Explorer", url: "https://explorer.arc.io" },
+  },
+});
 
 export const xLayer = defineChain({
   id: 196,
@@ -50,6 +175,38 @@ function token(symbol: SupportedTokenSymbol, address: Address | undefined, decim
   return { symbol, address, decimals, kind };
 }
 
+
+/**
+ * A CCTP payout destination that never holds a treasury.
+ *
+ * `executionBackend` is required by the type but meaningless here, so it is paired with
+ * `destinationOnly` and `settlementBackendForChainId` refuses these chains.
+ */
+function destinationChain(
+  key: SupportedChainKey,
+  name: string,
+  viemChain: Chain,
+  explorerUrl: string,
+  usdc: Address,
+  cctpDomain: number,
+  cctp: typeof CCTP_TESTNET | typeof CCTP_MAINNET,
+): ChainConfig {
+  return {
+    key,
+    name,
+    chainId: viemChain.id,
+    explorerUrl,
+    nativeSymbol: viemChain.nativeCurrency.symbol,
+    nativeDecimals: viemChain.nativeCurrency.decimals,
+    viemChain,
+    usdcAddress: usdc,
+    tokens: { USDC: token("USDC", usdc, 6) },
+    executionBackend: "delegated-7710",
+    destinationOnly: true,
+    cctp: { domain: cctpDomain, ...cctp },
+  };
+}
+
 export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   baseSepolia: {
     key: "baseSepolia",
@@ -57,7 +214,10 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: baseSepolia.id,
     explorerUrl: "https://sepolia.basescan.org",
     nativeSymbol: "ETH",
+    nativeDecimals: 18,
     viemChain: baseSepolia,
+    executionBackend: "delegated-7710",
+    cctp: { domain: CCTP_DOMAIN.base, ...CCTP_TESTNET },
     usdcAddress: process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC_DECIMALS ?? 6)),
@@ -69,7 +229,10 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: base.id,
     explorerUrl: "https://basescan.org",
     nativeSymbol: "ETH",
+    nativeDecimals: 18,
     viemChain: base,
+    executionBackend: "delegated-7710",
+    cctp: { domain: CCTP_DOMAIN.base, ...CCTP_MAINNET },
     usdcAddress: process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_USDC_DECIMALS ?? 6)),
@@ -81,7 +244,10 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: arbitrumSepolia.id,
     explorerUrl: "https://sepolia.arbiscan.io",
     nativeSymbol: "ETH",
+    nativeDecimals: 18,
     viemChain: arbitrumSepolia,
+    executionBackend: "delegated-7710",
+    cctp: { domain: CCTP_DOMAIN.arbitrum, ...CCTP_TESTNET },
     usdcAddress: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC_DECIMALS ?? 6)),
@@ -93,7 +259,10 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: 196,
     explorerUrl: "https://www.oklink.com/xlayer",
     nativeSymbol: "OKB",
+    nativeDecimals: 18,
     viemChain: xLayer,
+    executionBackend: "delegated-7710",
+    cctp: { domain: CCTP_DOMAIN.xLayer, ...CCTP_MAINNET },
     usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_USDC_DECIMALS ?? 6)),
@@ -106,13 +275,83 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     chainId: 1952,
     explorerUrl: "https://www.oklink.com/xlayer-test",
     nativeSymbol: "OKB",
+    nativeDecimals: 18,
     viemChain: xLayerTestnet,
+    executionBackend: "delegated-7710",
     usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined,
     tokens: {
       USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC_DECIMALS ?? 6)),
       OKB: token("OKB", undefined, 18, "native"),
     },
   },
+  arcTestnet: {
+    key: "arcTestnet",
+    name: "Arc Testnet",
+    chainId: 5042002,
+    explorerUrl: "https://explorer.testnet.arc.io",
+    // Arc's gas asset is native USDC at 18 decimals, while the ERC-20 interface below
+    // reports 6. They are the same balance viewed at different precision.
+    nativeSymbol: "USDC",
+    nativeDecimals: 18,
+    viemChain: arcTestnet,
+    usdcAddress: (process.env.NEXT_PUBLIC_ARC_TESTNET_USDC as Address | undefined) ?? ARC_USDC_ADDRESS,
+    tokens: {
+      USDC: token("USDC", (process.env.NEXT_PUBLIC_ARC_TESTNET_USDC as Address | undefined) ?? ARC_USDC_ADDRESS, 6),
+    },
+    executionBackend: "arc-vault",
+    cctp: { domain: CCTP_DOMAIN.arc, ...CCTP_TESTNET },
+    vaultFactory: process.env.NEXT_PUBLIC_ARC_TESTNET_VAULT_FACTORY as Address | undefined,
+    maxLogRange: ARC_MAX_LOG_RANGE,
+    minMaxFeePerGas: ARC_MIN_MAX_FEE_PER_GAS,
+  },
+  arc: {
+    key: "arc",
+    name: "Arc",
+    chainId: 5042,
+    explorerUrl: "https://explorer.arc.io",
+    nativeSymbol: "USDC",
+    nativeDecimals: 18,
+    viemChain: arc,
+    usdcAddress: (process.env.NEXT_PUBLIC_ARC_USDC as Address | undefined) ?? ARC_USDC_ADDRESS,
+    tokens: {
+      USDC: token("USDC", (process.env.NEXT_PUBLIC_ARC_USDC as Address | undefined) ?? ARC_USDC_ADDRESS, 6),
+    },
+    executionBackend: "arc-vault",
+    cctp: { domain: CCTP_DOMAIN.arc, ...CCTP_MAINNET },
+    vaultFactory: process.env.NEXT_PUBLIC_ARC_VAULT_FACTORY as Address | undefined,
+    maxLogRange: ARC_MAX_LOG_RANGE,
+    minMaxFeePerGas: ARC_MIN_MAX_FEE_PER_GAS,
+  },
+  // --- CCTP payout destinations -----------------------------------------------------------------
+  // Addresses and domains are Circle's published values; see docs/arc.md.
+  ethereum: destinationChain(
+    "ethereum", "Ethereum", mainnet, "https://etherscan.io",
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", CCTP_DOMAIN.ethereum, CCTP_MAINNET,
+  ),
+  ethereumSepolia: destinationChain(
+    "ethereumSepolia", "Ethereum Sepolia", sepolia, "https://sepolia.etherscan.io",
+    "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", CCTP_DOMAIN.ethereum, CCTP_TESTNET,
+  ),
+  optimism: destinationChain(
+    "optimism", "OP Mainnet", optimism, "https://optimistic.etherscan.io",
+    "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", CCTP_DOMAIN.optimism, CCTP_MAINNET,
+  ),
+  optimismSepolia: destinationChain(
+    "optimismSepolia", "OP Sepolia", optimismSepolia, "https://sepolia-optimism.etherscan.io",
+    "0x5fd84259d66Cd46123540766Be93DFE6D43130D7", CCTP_DOMAIN.optimism, CCTP_TESTNET,
+  ),
+  arbitrum: destinationChain(
+    "arbitrum", "Arbitrum One", arbitrum, "https://arbiscan.io",
+    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", CCTP_DOMAIN.arbitrum, CCTP_MAINNET,
+  ),
+  polygon: destinationChain(
+    "polygon", "Polygon PoS", polygon, "https://polygonscan.com",
+    "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", CCTP_DOMAIN.polygon, CCTP_MAINNET,
+  ),
+  polygonAmoy: destinationChain(
+    "polygonAmoy", "Polygon Amoy", polygonAmoy, "https://amoy.polygonscan.com",
+    "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", CCTP_DOMAIN.polygon, CCTP_TESTNET,
+  ),
 };
 
 export function chainById(chainId: number): ChainConfig | undefined {
@@ -253,6 +492,125 @@ export const treasuryFactoryAbi = [
       { indexed: true, name: "treasury", type: "address" },
       { indexed: false, name: "relayer", type: "address" },
       { indexed: false, name: "token", type: "address" }
+    ]
+  }
+] as const satisfies Abi;
+
+/**
+ * AgentTreasury: the Arc settlement vault Treasury Copilot deploys and owns.
+ * Unlike `treasuryAbi`, this contract is in the live execution path on Arc.
+ */
+export const agentTreasuryAbi = [
+  {
+    type: "function",
+    name: "initialize",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_owner", type: "address" },
+      { name: "_executor", type: "address" },
+      { name: "_token", type: "address" },
+      { name: "_tokenMessenger", type: "address" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "payout",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "requestId", type: "bytes32" },
+      { name: "recipient", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "payoutCrossChain",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "requestId", type: "bytes32" },
+      { name: "recipient", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "destinationDomain", type: "uint32" },
+      { name: "maxFee", type: "uint256" },
+      { name: "minFinalityThreshold", type: "uint32" },
+      { name: "hookData", type: "bytes" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "recipient", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: []
+  },
+  { type: "function", name: "fundFeeReserve", stateMutability: "nonpayable", inputs: [{ name: "amount", type: "uint256" }], outputs: [] },
+  { type: "function", name: "releaseFeeReserve", stateMutability: "nonpayable", inputs: [{ name: "amount", type: "uint256" }], outputs: [] },
+  { type: "function", name: "setFeeReserveCap", stateMutability: "nonpayable", inputs: [{ name: "cap", type: "uint256" }], outputs: [] },
+  { type: "function", name: "setExecutor", stateMutability: "nonpayable", inputs: [{ name: "_executor", type: "address" }], outputs: [] },
+  { type: "function", name: "setTokenMessenger", stateMutability: "nonpayable", inputs: [{ name: "_tokenMessenger", type: "address" }], outputs: [] },
+  { type: "function", name: "setPaused", stateMutability: "nonpayable", inputs: [{ name: "_paused", type: "bool" }], outputs: [] },
+  { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  { type: "function", name: "executor", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  { type: "function", name: "token", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  { type: "function", name: "tokenMessenger", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  { type: "function", name: "paused", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "bool" }] },
+  { type: "function", name: "feeReserve", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "feeReserveCap", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "availableBalance", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "executed", stateMutability: "view", inputs: [{ name: "", type: "bytes32" }], outputs: [{ name: "", type: "bool" }] },
+  {
+    type: "event",
+    name: "Executed",
+    inputs: [
+      { indexed: true, name: "requestId", type: "bytes32" },
+      { indexed: true, name: "recipient", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+      { indexed: false, name: "timestamp", type: "uint256" }
+    ]
+  },
+  {
+    type: "event",
+    name: "CrossChainInitiated",
+    inputs: [
+      { indexed: true, name: "requestId", type: "bytes32" },
+      { indexed: true, name: "destinationDomain", type: "uint32" },
+      { indexed: true, name: "recipient", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+      { indexed: false, name: "maxFee", type: "uint256" },
+      { indexed: false, name: "forwarded", type: "bool" },
+      { indexed: false, name: "timestamp", type: "uint256" }
+    ]
+  }
+] as const satisfies Abi;
+
+export const agentTreasuryFactoryAbi = [
+  {
+    type: "function",
+    name: "createTreasury",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "executor", type: "address" },
+      { name: "token", type: "address" }
+    ],
+    outputs: [{ name: "clone", type: "address" }]
+  },
+  { type: "function", name: "treasuryImplementation", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  { type: "function", name: "tokenMessenger", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+  {
+    type: "event",
+    name: "TreasuryCreated",
+    inputs: [
+      { indexed: true, name: "owner", type: "address" },
+      { indexed: true, name: "treasury", type: "address" },
+      { indexed: false, name: "executor", type: "address" },
+      { indexed: false, name: "token", type: "address" },
+      { indexed: false, name: "tokenMessenger", type: "address" }
     ]
   }
 ] as const satisfies Abi;

@@ -7,6 +7,7 @@ import {
   reviewQueuedPolicyRequest,
 } from "@/lib/apiServer";
 import { genlayerRead, isGenLayerCapacityError } from "@/lib/genlayerServer";
+import { advanceBridgedRequestsForPolicy, type BridgeAdvanceOutcome } from "@/lib/cctpBridge";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -28,6 +29,7 @@ export async function GET(request: Request) {
     const policies = await genlayerRead<string[]>(registry as Address, "list_policies", [], "finalized");
     const reviewed: string[] = [];
     const completed: string[] = [];
+    const bridged: BridgeAdvanceOutcome[] = [];
     const failed: Array<{ request_id: string; error: string }> = [];
     for (const rawPolicy of policies.slice(0, 50)) {
       if (!isAddress(rawPolicy)) continue;
@@ -59,11 +61,24 @@ export async function GET(request: Request) {
           failed.push({ request_id: rawRequestId, error: error instanceof Error ? error.message : "Execution failed" });
         }
       }
+
+      // Cross-chain requests left the vault in an earlier pass and are waiting on Circle's
+      // destination mint. Advance them after executing, so a burn made in this same run gets its
+      // first completion attempt without waiting for the next cron tick.
+      try {
+        bridged.push(...await advanceBridgedRequestsForPolicy(policy, requestIds.slice(-25)));
+      } catch (error) {
+        failed.push({
+          request_id: `bridge:${policy}`,
+          error: error instanceof Error ? error.message : "Bridge advance failed",
+        });
+      }
     }
     const capacityFailures = failed.filter((entry) => isGenLayerCapacityError(entry.error));
     return Response.json({
       reviewed,
       completed,
+      bridged,
       failed,
       retryable: capacityFailures.length > 0,
     }, capacityFailures.length > 0 ? {

@@ -24,3 +24,13 @@ Admin-Dashboard.md
 demo-video/
 pk.md
 keys.md
+
+# Any local env variant, including ad-hoc backups, must never be committed.
+.env*
+!.env.example
+
+# unlazy working artifacts
+GATES*.md
+.unlazy/
+.unlazy-hook-state.json
+.claude/settings.local.json

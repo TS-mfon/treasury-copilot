@@ -392,3 +392,172 @@ scan. Both workers use the same idempotent on-chain review and execution leases.
 9. Test a denied cap request.
 10. Rotate the API key and verify the old key returns `invalid_api_key`.
 11. Revoke the agent and verify balance/history endpoints reject the old binding.
+
+## 10. Arc Testnet settlement
+
+Arc settles differently from Base and Arbitrum. Those chains redelegate the owner's ERC-7715
+MetaMask permission to the 1Shot relayer. Arc has neither the MetaMask Delegation Framework nor a
+1Shot capability entry, so an approved Arc payment is executed by calling `payout` on an
+`AgentTreasury` vault the owner deployed, signed by a dedicated Arc executor key.
+
+See [Arc settlement and Circle interoperability](arc.md) for the verified network constants,
+deployed addresses, and settlement evidence.
+
+Additional Vercel environment values:
+
+```text
+NEXT_PUBLIC_ARC_TESTNET_RPC_URL=https://rpc.testnet.arc.io
+NEXT_PUBLIC_ARC_TESTNET_USDC=0x3600000000000000000000000000000000000000
+NEXT_PUBLIC_ARC_TESTNET_VAULT_FACTORY=0xe47cE1C562C6355cD9Cf4cF6420Af2cD238456fB
+NEXT_PUBLIC_ARC_TESTNET_EXECUTOR_ADDRESS=0xA3bb5f926acf42460217CD1f0A88D427e5cb438b
+ARC_EXECUTOR_PRIVATE_KEY
+ARC_SETTLEMENT_ENABLED=true
+ALLOWED_EVM_CHAIN_IDS=84532,5042002
+```
+
+`ARC_EXECUTOR_PRIVATE_KEY` must be a different key from `AGENT_SIGNER_PRIVATE_KEY`. The
+application refuses to start an Arc payout when the two match, because the Arc executor must not
+also be the registry gateway or the GenLayer execution reporter. Fund the executor address with
+Arc USDC, which is the gas token, from <https://faucet.circle.com>.
+
+`ARC_SETTLEMENT_ENABLED` is a server-side kill switch. With it unset or false, an Arc binding is
+rejected before any transaction is built, in the same spirit as the gated Base Mainnet rollout.
+
+Verify the wiring before and after deploying:
+
+```bash
+npx tsx scripts/verify-arc.mts executor
+npx tsx scripts/verify-arc.mts factory
+npx tsx scripts/verify-arc.mts chain-allowlist
+npx tsx scripts/verify-arc.mts vault-executor
+npx tsx scripts/verify-arc.mts settle
+```
+
+The `settle` check performs a real 0.01 USDC payout on Arc Testnet through the application's own
+executor module, then asserts the recipient balance moved by exactly that amount and that the
+request id is recorded as executed on chain.
+
+## 11. Policy V6: vault settlement and per-request destination chains
+
+V6 adds two capabilities V5 could not express.
+
+**Vault settlement.** A V5 policy proves settlement authority with a registered ERC-7715
+delegation. Arc has no delegation framework, so V6 adds a `settlement_backend` of either
+`delegated-7710` or `arc-vault`, plus a `vault_address` and a
+`register_vault(vault_address, token_address)` write. `register_vault` is the arc-vault counterpart
+to `register_delegation`: it refuses unless the vault matches the funding account the registry
+already pinned, so the vault cannot be swapped for another contract after registration.
+
+**Per-request destination chains.** `queue_request` takes an optional `destination_chain_id`. Empty
+means settle on the policy's own chain, which keeps every V5-shaped caller working. The owner
+controls an allowlist via `set_destination_chain_entry`, the settlement chain is always permitted
+and cannot be removed, and a destination outside the allowlist is a deterministic denial recorded
+before any policy review runs. Because the destination is reviewed and stored on chain, a relayer
+cannot redirect an approved payment to a chain the policy never approved.
+
+Requests also carry independent `bridge_tx_hash`, `attestation_status` and `destination_tx_hash`
+state, written by `record_bridge_initiated` and `record_bridge_attested`, so a cross-chain payment
+tracks its source burn, its attestation and its destination mint separately from execution.
+
+### Constructor arguments
+
+V6 appends two arguments to the V5 signature:
+
+```text
+registry owner authorized_agent execution_reporter delegated_account token_address
+delegation_context one_shot_method_id evm_chain_id per_tx_cap_atto weekly_cap_atto
+auto_approve_threshold_atto policy_text whitelist_csv settlement_backend destination_chains_csv
+```
+
+For an Arc binding, `delegated_account` is the AgentTreasury vault address, `settlement_backend` is
+`arc-vault`, and `destination_chains_csv` lists any additional chains the agent may be paid on. Pass
+`none` for an empty list; the settlement chain is added automatically.
+
+```bash
+genlayer deploy --contract contracts/genlayer/TreasuryPolicy.py --args \
+  0xREGISTRY 0xOWNER 0xAGENT 0xPLATFORM_REPORTER 0xARC_VAULT \
+  0x3600000000000000000000000000000000000000 \
+  none none 5042002 25000000 100000000 0 \
+  "Routine software and infrastructure spending only." \
+  none arc-vault 84532
+```
+
+After deployment, bind the vault:
+
+```bash
+genlayer write 0xPOLICY register_vault --args 0xARC_VAULT \
+  0x3600000000000000000000000000000000000000
+```
+
+### Registry registration: October 8, 2026
+
+The V6 Arc policy is registered and active in the production registry. Both keys matter here and
+they are different accounts:
+
+```text
+Registry gateway (registry owner, must sign registration):
+0x1072e78B72840BbC921493ea1C97dC5CAA54598F
+
+Owner and Arc policy deployer:
+0xEd9EDd8586b20524CafA4F568413C504C9B03172
+```
+
+The first attempt failed with `[EXPECTED] Only registry gateway` because the GenLayer CLI's active
+account was the owner, not the gateway. Import the gateway key and set it active before registering:
+
+```bash
+genlayer account import --name arc-registry-gateway --private-key "$GATEWAY_KEY"
+genlayer account use arc-registry-gateway
+genlayer write 0x63A045a7B3A1b173525EFFB41B07A59349Cd33D9 register_policy --args \
+  0xOWNER 0xAGENT 0xPOLICY 5042002 0xARC_VAULT \
+  0x3600000000000000000000000000000000000000 USDC 6 <owner_nonce>
+```
+
+For an Arc binding the registry's funding-account slot holds the **vault address**, which is what
+`_require_active_registry_binding` compares against the policy. Reading the binding back confirms:
+
+```text
+policy=0x704345601942B0e7Ec503BFFD6FACA5f40D746E9
+chain=5042002
+vault=0xb121b87cf9e30293eb619b7ebc0554dfd3018cc2
+token=0x3600000000000000000000000000000000000000
+active=true
+```
+
+Verify with `npx tsx --tsconfig apps/web/tsconfig.json scripts/verify-cctp.mts registry-binding`.
+
+### Active V6 Arc deployment: October 7, 2026
+
+```text
+Policy:
+0x704345601942B0e7Ec503BFFD6FACA5f40D746E9
+
+Policy deployment:
+0x501645eaf325c5989be10f039b8e720eec1c4a86dd19d75676b6fb57e8c4d66d
+```
+
+The deployment reached `FINALIZED` with unanimous validator agreement and
+`execution_result: SUCCESS`. Reading state back confirms `contract_version: 6`,
+`settlement_backend: arc-vault`, `evm_chain_id: 5042002`, `vault_registered: true`,
+`vault_address: 0xB121B87cF9e30293eb619B7eBC0554dfd3018CC2`, and
+`allowed_destination_chains: ['5042002', '84532']`.
+
+This policy is **not** registered in the production registry. Registration requires the registry
+gateway key, which is the platform signer, and the application performs it server-side during owner
+setup. Until it is registered, `_require_active_registry_binding` will reject `queue_request`, so
+this policy is contract-level evidence rather than a live agent binding.
+
+### Owner migration
+
+V6 is deployed as a new contract version; existing V5 policies keep working unchanged. To move a
+binding to Arc, an owner deploys a new V6 policy, registers it against the existing registry with
+the vault address in the `delegated_account` slot, calls `register_vault`, and receives a new agent
+API key. Nothing about an existing Base Sepolia policy changes.
+
+### Agent API
+
+`POST /api/v1/spend` accepts an optional `destination_chain` (also `destination_chain_id` or
+`destinationChainId`). An unsupported chain id is rejected at the API boundary rather than on chain.
+The destination is part of a request's identity, so replaying one `idempotency_key` with a different
+destination is refused. Responses carry `route`, `destination_chain`, and a `bridge` object with the
+burn hash, attestation status and destination mint hash.
