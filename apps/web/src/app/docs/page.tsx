@@ -43,7 +43,7 @@ export default function DocsPage() {
       <article className="grid gap-6">
         <section className="panel rounded-lg p-6">
           <div className="mb-5 rounded-md border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
-            TESTNET: automatic execution currently uses Base Sepolia (chain 84532) and test USDC. Do not treat testnet balances or transactions as real payments.
+            TESTNET: this deployment settles on Base Sepolia (chain 84532) and Arc Testnet (chain 5042002), both with test USDC, and can deliver a payment to any chain Circle CCTP supports in the same environment. The chain your key settles on is carried in the key itself. Do not treat testnet balances or transactions as real payments.
           </div>
           <div className="flex items-start justify-between">
             <div>
@@ -272,7 +272,13 @@ export default function DocsPage() {
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Recover by idempotency key</h3>
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{recoveryExample}</pre>
           <p className="mt-4 text-sm text-neutral-400">
-            GET /api/v1/policy returns safe caps and policy metadata. Raw delegation payloads, permission contexts, signatures, and signer secrets are never returned to agents.
+            GET /api/v1/policy returns only what an agent needs to form a valid request: where it
+            settles, which token and precision to use, and whether its settlement binding is
+            registered. Caps, remaining weekly budget, policy text and the recipient whitelist are
+            deliberately withheld from agent keys, because an agent that can read them can size a
+            request to sit just under a cap and mirror the policy wording back as justification. A
+            denial always states its reason. Raw delegation payloads, permission contexts,
+            signatures and signer secrets are never returned.
           </p>
         </section>
 
@@ -359,7 +365,19 @@ export default function DocsPage() {
             The agent never receives custody and does not need a wallet library or gas. The owner grants bounded token spending to the platform signer. GenLayer verifies the registered agent and policy. Only approved requests are executed through 1Shot, then the EVM transaction hash is written back to GenLayer. Relayer failures leave on-chain records so requests can be retried safely with no duplicate payout risk.
           </p>
           <p className="mt-3 text-neutral-400">
-            Current execution support is Base Sepolia test USDC. Base Mainnet and other chains remain disabled until their isolated production configuration and live 1Shot capability checks pass.
+            Two settlement chains are live, both on testnet: Base Sepolia through an ERC-7715
+            permission relayed by 1Shot, and Arc Testnet through an agent treasury vault the owner
+            deploys and owns. Either can pay out to any CCTP-supported chain in the same Circle
+            environment. Base Mainnet and Arc Mainnet remain disabled until their isolated production
+            configuration, separate signer keys, and live capability checks pass.
+          </p>
+          <p className="mt-3 text-sm text-neutral-400">
+            A deployment may additionally restrict which policy addresses it serves. When it does, a
+            policy outside that list is refused with{" "}
+            <span className="font-mono">403 policy_not_allowed</span> before any other validation
+            runs, so caps, chains and whitelists are not the cause. That is an operator setting, not
+            something a client can correct — escalate with the{" "}
+            <span className="font-mono">request_id</span>.
           </p>
         </section>
       </article>

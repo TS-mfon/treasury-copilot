@@ -16,6 +16,7 @@ import { deployAgentTreasuryVault, parseTokenAmount } from "@/lib/evm";
 import { requestWeeklyUsdcDelegation, type TreasuryDelegationGrant } from "@/lib/metamaskDelegation";
 import { friendlyError } from "@/lib/errors";
 import { useEnsureChain } from "@/lib/useEnsureChain";
+import { VaultFunding } from "@/components/VaultFunding";
 import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
 import { SetupProgressModal } from "@/components/SetupProgressModal";
 
@@ -73,6 +74,7 @@ export default function SetupPage() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
   const [vault, setVault] = useState<Address | null>(null);
+  const [agentName, setAgentName] = useState("");
 
   const selectedChain = SUPPORTED_CHAINS[chainKey];
   // Arc proves settlement authority with a deployed vault instead of a wallet permission.
@@ -273,6 +275,14 @@ export default function SetupPage() {
       });
       const setup = await setupResponse.json();
       if (!setupResponse.ok) throw new Error(setup.message ?? setup.error ?? "API key setup failed");
+      // The name is display metadata, so a failure to save it must not fail a completed setup.
+      if (agentName.trim() && setup.policy) {
+        await fetch("/api/owner/agent-label", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ policy: setup.policy, label: agentName.trim() }),
+        }).catch(() => undefined);
+      }
       setApiKey(setup.agent_api_key);
       setSetupResult({
         policy: setup.policy as Address,
@@ -378,6 +388,20 @@ export default function SetupPage() {
               <input className="field" value="USDC" disabled />
             </label>
             <label className="grid gap-2 text-sm font-medium">
+              Agent name
+              <input
+                className="field"
+                value={agentName}
+                maxLength={64}
+                onChange={(event) => setAgentName(event.target.value)}
+                placeholder="Billing agent"
+              />
+              <span className="text-xs font-normal text-neutral-400">
+                How this agent appears in your dashboard and on the top-up page, so you are not
+                reading addresses to tell them apart.
+              </span>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
               Agent wallet address
               <input className="field" value={agentAddress} onChange={(event) => setAgentAddress(event.target.value)} placeholder="0x..." />
             </label>
@@ -415,13 +439,23 @@ export default function SetupPage() {
           )}
 
           {vault && vaultSettled && (
-            <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4 text-sm text-success">
-              <p className="font-semibold">Vault deployed</p>
-              <p className="mt-2 break-all text-neutral-300">{vault}</p>
-              <p className="mt-2 text-neutral-300">
-                Fund it with {tokenSymbol} on {selectedChain.name}, then register it below.
-              </p>
-            </div>
+            <>
+              <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4 text-sm text-success">
+                <p className="font-semibold">Vault deployed</p>
+                <p className="mt-2 break-all text-neutral-300">{vault}</p>
+                <p className="mt-2 text-neutral-300">
+                  A new vault is empty. Fund it now so your agent can actually pay, then register it
+                  below. You can always top it up again later.
+                </p>
+              </div>
+              <div className="mt-4">
+                <VaultFunding
+                  chainKey={chainKey}
+                  vault={vault}
+                  label={agentName.trim() || undefined}
+                />
+              </div>
+            </>
           )}
 
           {grant && !vaultSettled && (

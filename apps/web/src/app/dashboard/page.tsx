@@ -14,6 +14,8 @@ import { hashActionPayload } from "@/lib/ownerActions";
 
 interface PolicyRow {
   policy: Address;
+  /** Owner-chosen display name. Null when none was set or the label store is unavailable. */
+  label?: string | null;
   binding: {
     owner: Address;
     agent: Address;
@@ -26,6 +28,8 @@ interface PolicyRow {
   };
   state: {
     delegation_registered?: boolean;
+    settlement_backend?: string;
+    vault_registered?: boolean;
     weekly_cap_atto?: string;
     weekly_spent_atto?: string;
   };
@@ -139,19 +143,32 @@ export default function DashboardPage() {
             const decimals = Number(row.binding.token_decimals);
             const spent = formatUnits(BigInt(row.state.weekly_spent_atto ?? "0"), decimals);
             const cap = formatUnits(BigInt(row.state.weekly_cap_atto ?? "0"), decimals);
-            const ready = row.binding.active && row.state.delegation_registered;
+            // Each backend has its own binding: a delegation on Base, a vault on Arc. Checking only
+            // the delegation left every vault-settled policy permanently "not ready".
+            const vaultSettled = row.state.settlement_backend === "arc-vault";
+            const bound = vaultSettled ? row.state.vault_registered === true : row.state.delegation_registered === true;
+            const ready = row.binding.active && bound;
             return (
               <article key={row.policy} className="bg-surface-low p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <span className={`badge ${ready ? "text-success" : "text-danger"}`}>
-                    <ShieldCheck size={13} className="mr-1" /> {ready ? "READY" : row.binding.active ? "NEEDS DELEGATION" : "REVOKED"}
+                    <ShieldCheck size={13} className="mr-1" /> {ready
+                      ? "READY"
+                      : !row.binding.active
+                        ? "REVOKED"
+                        : (vaultSettled ? "NEEDS VAULT" : "NEEDS DELEGATION")}
                   </span>
                   <span className="font-mono text-xs text-neutral-500">KEY V{row.binding.api_key_version}</span>
                 </div>
                 <div className="mt-6 grid gap-4 sm:grid-cols-2">
                   <div>
                     <p className="text-xs uppercase text-neutral-500">Agent</p>
-                    <p className="mt-1 break-all font-mono text-xs text-neutral-200">{row.binding.agent}</p>
+                    {row.label
+                      ? <p className="mt-1 text-sm font-semibold text-ink">{row.label}</p>
+                      : null}
+                    <p className={`break-all font-mono text-xs text-neutral-200 ${row.label ? "mt-1" : "mt-1"}`}>
+                      {row.binding.agent}
+                    </p>
                   </div>
                   <div>
                     <p className="text-xs uppercase text-neutral-500">Weekly usage</p>

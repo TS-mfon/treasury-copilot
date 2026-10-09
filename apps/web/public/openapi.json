@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Treasury Copilot Agent API",
-    "version": "1.2.0",
-    "description": "HTTP API for policy-gated agent spending. Current automatic execution uses Base Sepolia test USDC. POST /spend is asynchronous and returns 202 after GenLayer submission."
+    "version": "1.4.0",
+    "description": "HTTP API for policy-gated agent spending. Current automatic execution uses Base Sepolia test USDC. POST /spend is asynchronous and returns 202 after GenLayer submission.\n\nSettlement depends on the chain a treasury is bound to. Base Sepolia settles through an ERC-7715 permission relayed by 1Shot. Arc Testnet settles through an agent treasury vault the owner deploys and owns, because Arc has neither the MetaMask Delegation Framework nor 1Shot support. A request may name any chain Circle CCTP supports as its destination; the policy reviews and stores that destination on chain, so a relayer cannot redirect an approved payment."
   },
   "servers": [
     {
       "url": "https://treasurycopilot.app/api/v1",
-      "description": "Base Sepolia testnet"
+      "description": "Live testnet deployment. Serves both settlement backends: Base Sepolia (84532, ERC-7715 delegation) and Arc Testnet (5042002, agent treasury vault). The chain a key is bound to is carried in the key itself."
     }
   ],
   "security": [
@@ -144,36 +144,21 @@
               }
             }
           },
-          "202": {
-            "description": "The deterministic request ID is known, but the request is not visible on GenLayer yet",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": ["request_id", "status", "retryable"],
-                  "properties": {
-                    "request_id": {
-                      "$ref": "#/components/schemas/RequestId"
-                    },
-                    "status": {
-                      "const": "not_found_or_pending"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "retryable": {
-                      "const": true
-                    }
-                  }
-                }
-              }
-            }
-          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
           "422": {
             "$ref": "#/components/responses/Unprocessable"
+          },
+          "404": {
+            "description": "GenLayer holds no request for this idempotency key: the submission was never accepted, or it was rejected before reaching the policy. retryable is false because polling this endpoint cannot make a record appear. Re-send the original POST once with the same key; that is idempotent and will not double-pay. The returned derived_request_id is computed from the key, not read from chain, and must not be treated as a payment id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -253,8 +238,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ready_to_spend": {
+                          "type": "boolean",
+                          "description": "False when anything prevents a payment. Check this first."
+                        },
+                        "blockers": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SpendBlocker"
+                          },
+                          "description": "Empty when ready_to_spend is true."
+                        },
+                        "cap_boundary": {
+                          "enum": [
+                            "inclusive"
+                          ],
+                          "description": "An amount exactly equal to per_tx_cap is allowed."
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -291,7 +302,11 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["policy", "agent", "requests"],
+                  "required": [
+                    "policy",
+                    "agent",
+                    "requests"
+                  ],
                   "properties": {
                     "policy": {
                       "$ref": "#/components/schemas/Address"
@@ -331,7 +346,8 @@
     "schemas": {
       "Address": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "Compared case-insensitively, so EIP-55 checksummed and all-lowercase forms are equivalent."
       },
       "RequestId": {
         "type": "string",
@@ -351,7 +367,14 @@
       "SpendRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["agent_address", "recipient", "amount", "category", "justification", "idempotency_key"],
+        "required": [
+          "agent_address",
+          "recipient",
+          "amount",
+          "category",
+          "justification",
+          "idempotency_key"
+        ],
         "properties": {
           "agent_address": {
             "$ref": "#/components/schemas/Address"
@@ -389,12 +412,34 @@
                 }
               ]
             }
+          },
+          "destination_chain": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            ],
+            "description": "Optional. Chain the payee is paid on. Omit it to settle on the treasury's own chain. Any chain Circle CCTP supports in the same Circle environment is accepted; an unsupported chain id is refused with 400 rather than denied on chain. The destination is part of a request's identity, so one idempotency_key cannot be replayed with a different destination. Accepted aliases: destination_chain_id, destinationChainId.",
+            "examples": [
+              84532,
+              "5042002"
+            ]
           }
         }
       },
       "InvoiceCommon": {
         "type": "object",
-        "required": ["invoice_id", "merchant_id", "expected_recipient", "expected_amount", "issued_at"],
+        "required": [
+          "invoice_id",
+          "merchant_id",
+          "expected_recipient",
+          "expected_amount",
+          "issued_at"
+        ],
         "properties": {
           "invoice_id": {
             "type": "string",
@@ -431,7 +476,12 @@
           },
           {
             "type": "object",
-            "required": ["type", "uri", "merchant_domain", "sha256"],
+            "required": [
+              "type",
+              "uri",
+              "merchant_domain",
+              "sha256"
+            ],
             "properties": {
               "type": {
                 "const": "invoice_url"
@@ -461,7 +511,12 @@
           },
           {
             "type": "object",
-            "required": ["type", "signer", "signature", "content_hash"],
+            "required": [
+              "type",
+              "signer",
+              "signature",
+              "content_hash"
+            ],
             "properties": {
               "type": {
                 "const": "signed_invoice"
@@ -483,7 +538,17 @@
       },
       "Request": {
         "type": "object",
-        "required": ["request_id", "recipient", "amount", "amount_units", "category", "justification", "verdict", "status", "execution_status"],
+        "required": [
+          "request_id",
+          "recipient",
+          "amount",
+          "amount_units",
+          "category",
+          "justification",
+          "verdict",
+          "status",
+          "execution_status"
+        ],
         "properties": {
           "request_id": {
             "$ref": "#/components/schemas/RequestId"
@@ -517,19 +582,50 @@
             "type": "string"
           },
           "verdict": {
-            "enum": ["pending", "approved", "denied"]
+            "enum": [
+              "pending",
+              "approved",
+              "denied"
+            ]
           },
           "decision_mode": {
-            "enum": ["deterministic", "prompt_comparative"]
+            "enum": [
+              "deterministic",
+              "prompt_comparative"
+            ]
           },
           "status": {
-            "enum": ["submitted", "reviewing", "review_pending", "pending", "approved", "denied", "ready", "executing", "failed", "executed", "not_applicable"]
+            "enum": [
+              "submitted",
+              "reviewing",
+              "review_pending",
+              "pending",
+              "approved",
+              "denied",
+              "ready",
+              "executing",
+              "bridging",
+              "failed",
+              "executed",
+              "not_applicable"
+            ]
           },
           "reasoning": {
             "type": "string"
           },
           "execution_status": {
-            "enum": ["submitted", "reviewing", "review_pending", "ready", "executing", "failed", "executed", "not_applicable"]
+            "enum": [
+              "submitted",
+              "reviewing",
+              "review_pending",
+              "ready",
+              "executing",
+              "bridging",
+              "failed",
+              "executed",
+              "not_applicable"
+            ],
+            "description": "bridging means the payment was burned on the settlement chain and is awaiting Circle's mint on the destination. It reaches executed only once that mint is confirmed."
           },
           "execution_error": {
             "type": "string"
@@ -538,25 +634,61 @@
             "type": "string"
           },
           "explorer_url": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "created_at": {
             "type": "string"
           },
           "updated_at": {
             "type": "string"
+          },
+          "route": {
+            "enum": [
+              "direct",
+              "cctp"
+            ],
+            "description": "direct settles on the treasury's own chain. cctp burns on the settlement chain for delivery on another."
+          },
+          "destination_chain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChainRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Chain the payee is paid on. Equals `chain` for a direct payment."
+          },
+          "bridge": {
+            "$ref": "#/components/schemas/BridgeState"
           }
         }
       },
       "SpendAccepted": {
         "type": "object",
-        "required": ["request_id", "verdict", "status", "request", "poll_url", "idempotent_replay", "genlayer"],
+        "required": [
+          "request_id",
+          "verdict",
+          "status",
+          "request",
+          "poll_url",
+          "idempotent_replay",
+          "genlayer"
+        ],
         "properties": {
           "request_id": {
             "$ref": "#/components/schemas/RequestId"
           },
           "verdict": {
-            "enum": ["pending", "approved", "denied"]
+            "enum": [
+              "pending",
+              "approved",
+              "denied"
+            ]
           },
           "reasoning": {
             "type": "string"
@@ -577,7 +709,10 @@
             "type": "object",
             "properties": {
               "request_tx_hash": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           }
@@ -585,7 +720,10 @@
       },
       "RequestEnvelope": {
         "type": "object",
-        "required": ["policy", "request"],
+        "required": [
+          "policy",
+          "request"
+        ],
         "properties": {
           "policy": {
             "$ref": "#/components/schemas/Address"
@@ -597,87 +735,31 @@
       },
       "PolicyResponse": {
         "type": "object",
-        "required": ["policy", "state"],
+        "required": [
+          "policy",
+          "state"
+        ],
         "properties": {
           "policy": {
             "$ref": "#/components/schemas/Address"
           },
           "state": {
-            "type": "object",
-            "required": ["contract_version", "whitelist_enabled", "whitelisted_recipients", "security"],
-            "properties": {
-              "contract_version": {
-                "type": "string"
-              },
-              "authorized_agent": {
-                "$ref": "#/components/schemas/Address"
-              },
-              "delegated_account": {
-                "$ref": "#/components/schemas/Address"
-              },
-              "token_address": {
-                "$ref": "#/components/schemas/Address"
-              },
-              "evm_chain_id": {
-                "type": "string"
-              },
-              "per_tx_cap_atto": {
-                "type": "string"
-              },
-              "weekly_cap_atto": {
-                "type": "string"
-              },
-              "weekly_spent_atto": {
-                "type": "string"
-              },
-              "policy_text": {
-                "type": "string"
-              },
-              "whitelist_enabled": {
-                "type": "boolean"
-              },
-              "whitelisted_recipients": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/Address"
-                }
-              },
-              "delegation_registered": {
-                "type": "boolean"
-              },
-              "security": {
-                "type": "object",
-                "properties": {
-                  "contract_version": {
-                    "type": "string"
-                  },
-                  "semantic_review_required_for_all_requests": {
-                    "type": "boolean"
-                  },
-                  "asynchronous_review_supported": {
-                    "type": "boolean"
-                  },
-                  "legacy_fast_approval_active": {
-                    "type": "boolean"
-                  },
-                  "warnings": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/schemas/PolicyState"
           }
         }
       },
       "Error": {
         "type": "object",
-        "required": ["error", "message", "fields", "retryable"],
+        "required": [
+          "error",
+          "message",
+          "fields",
+          "retryable"
+        ],
         "properties": {
           "error": {
-            "type": "string"
+            "type": "string",
+            "description": "Machine-readable code. Operational states worth handling explicitly: `vault_unfunded` and `insufficient_vault_balance` (402, the call was valid but the treasury has no money and only the owner can fix it), `insufficient_fee_reserve` (402, a cross-chain payment has no fee reserve), `vault_not_registered` (409), `policy_not_allowed` (403, the deployment's policy allowlist refused this policy), `unsupported_destination_chain` (422), `cross_chain_unavailable` (422), `settlement_disabled` (503), `no_record` (404 from the recovery endpoint when GenLayer holds no request for an idempotency key), plus the auth and validation codes."
           },
           "message": {
             "type": "string"
@@ -692,10 +774,167 @@
             }
           },
           "request_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Always present, and mirrored in the x-correlation-id header."
           },
           "retryable": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Only 5xx responses are retryable. A 402 is terminal until the owner funds the treasury, so retrying it unchanged cannot succeed."
+          },
+          "owner_action_required": {
+            "type": "boolean",
+            "description": "Present on 402. The agent cannot clear this itself."
+          }
+        }
+      },
+      "ChainId": {
+        "type": "integer",
+        "description": "EVM chain id. Payable testnet chains are 11155111 (Ethereum Sepolia), 11155420 (OP Sepolia), 421614 (Arbitrum Sepolia), 84532 (Base Sepolia), 80002 (Polygon Amoy) and 5042002 (Arc Testnet). A chain id is not a CCTP domain: a testnet shares its mainnet domain, so the two must not be confused.",
+        "examples": [
+          84532,
+          5042002
+        ]
+      },
+      "ChainRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chain_id",
+          "name"
+        ],
+        "properties": {
+          "chain_id": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "name": {
+            "type": "string",
+            "examples": [
+              "Base Sepolia",
+              "Arc Testnet"
+            ]
+          },
+          "explorer_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        }
+      },
+      "BridgeState": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Cross-chain lifecycle, tracked independently of execution. Empty strings on a direct payment. The burn alone is not the payee's receipt: treat destination_tx_hash as the confirmation.",
+        "required": [
+          "tx_hash",
+          "attestation_status",
+          "destination_tx_hash"
+        ],
+        "properties": {
+          "tx_hash": {
+            "type": "string",
+            "description": "CCTP burn transaction on the settlement chain."
+          },
+          "attestation_status": {
+            "type": "string",
+            "description": "Circle's view of the burn. Empty until the burn is indexed."
+          },
+          "destination_tx_hash": {
+            "type": "string",
+            "description": "Mint transaction on the destination chain. Present only once Circle has minted."
+          },
+          "destination_explorer_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        }
+      },
+      "PolicyState": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What an agent key may learn about its own policy. Caps, remaining weekly budget, policy text and the recipient whitelist are deliberately withheld: an agent that can read them can size a request to sit just under a cap, mirror the policy's wording back as justification, and enumerate approved payees. A denial always states its reason, so the agent still learns why a request was refused without being handed the thresholds to design around. Owners see the full state through the owner endpoints.",
+        "required": [
+          "contract_version",
+          "settlement_backend",
+          "settlement_binding_registered"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "examples": [
+              "6"
+            ]
+          },
+          "authorized_agent": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "settlement_backend": {
+            "enum": [
+              "delegated-7710",
+              "arc-vault"
+            ],
+            "description": "delegated-7710 moves USDC out of the owner's own account through 1Shot, so there is nothing to fund. arc-vault pays out of a contract the owner deployed, which starts empty and must be funded before any payment can settle."
+          },
+          "settlement_chain": {
+            "$ref": "#/components/schemas/ChainRef"
+          },
+          "token_address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "settlement_binding_registered": {
+            "type": "boolean",
+            "description": "Whether the binding this backend requires exists: a registered delegation for delegated-7710, a registered vault for arc-vault. Check this rather than delegation_registered, which is always false on a vault-settled policy and is not a fault there."
+          },
+          "review": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "semantic_review_required_for_all_requests": {
+                "type": "boolean"
+              },
+              "immediate_review_submission": {
+                "type": "boolean"
+              }
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "disclosure": {
+            "type": "string"
+          }
+        }
+      },
+      "SpendBlocker": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "owner_action_required"
+        ],
+        "properties": {
+          "code": {
+            "enum": [
+              "vault_not_registered",
+              "delegation_not_registered",
+              "vault_unfunded",
+              "weekly_cap_exhausted"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "owner_action_required": {
+            "type": "boolean",
+            "description": "True when only the owner can clear this, such as funding a vault. False when it clears on its own, such as a weekly cap that resets."
           }
         }
       }

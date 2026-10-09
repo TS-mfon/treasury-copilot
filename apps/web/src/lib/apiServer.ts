@@ -117,16 +117,29 @@ export function policySecurityProfile(policy: PolicyState) {
   if (version === 4) {
     warnings.push("This policy uses the legacy two-transaction review flow. Re-register the delegation to migrate to V5 immediate review.");
   }
-  if (!policy.delegation_registered) {
+  // A vault-settled policy has no ERC-7715 delegation and never will, so reporting a missing one
+  // was a false alarm that read as a hard blocker. Each backend is checked against the binding it
+  // actually requires.
+  const vaultSettled = (policy.settlement_backend ?? "delegated-7710") === "arc-vault";
+  if (vaultSettled) {
+    if (!policy.vault_registered && !isAddress(String(policy.vault_address ?? ""))) {
+      warnings.push("No agent treasury vault is registered for this policy.");
+    }
+  } else if (!policy.delegation_registered) {
     warnings.push("No executable delegation is registered for this policy.");
   }
 
   return {
     contract_version: String(policy.contract_version ?? ""),
+    settlement_backend: vaultSettled ? "arc-vault" : "delegated-7710",
     semantic_review_required_for_all_requests: version >= 3,
     asynchronous_review_supported: version >= 4,
     immediate_review_submission: version >= 5,
     legacy_fast_approval_active: version > 0 && version < 3 && threshold > 0n,
+    // The binding this policy actually needs, so a client never has to guess which field matters.
+    settlement_binding_registered: vaultSettled
+      ? policy.vault_registered === true || isAddress(String(policy.vault_address ?? ""))
+      : policy.delegation_registered === true,
     warnings,
   };
 }
@@ -270,27 +283,92 @@ export function vaultAddressFor(policy: PolicyState): Address | undefined {
   return isAddress(funding) ? (funding as Address) : undefined;
 }
 
+export interface SpendBlocker {
+  code: string;
+  message: string;
+  /** Whether the agent can clear this itself, or whether it needs the owner. */
+  owner_action_required: boolean;
+}
+
+/**
+ * Why a treasury cannot pay right now, as a flat list an agent can act on.
+ *
+ * Previously the only signal was a nested `warnings` array, so "there is no money" and "the policy
+ * is misconfigured" looked the same and neither said who had to fix it.
+ */
+export function spendBlockers(
+  policy: PolicyState,
+  balanceUnits: bigint,
+  decimals: number,
+): SpendBlocker[] {
+  const blockers: SpendBlocker[] = [];
+  const profile = policySecurityProfile(policy);
+
+  if (!profile.settlement_binding_registered) {
+    blockers.push({
+      code: profile.settlement_backend === "arc-vault"
+        ? "vault_not_registered"
+        : "delegation_not_registered",
+      message: profile.settlement_backend === "arc-vault"
+        ? "No agent treasury vault is registered for this policy."
+        : "No executable delegation is registered for this policy.",
+      owner_action_required: true,
+    });
+  }
+  if (balanceUnits === 0n) {
+    blockers.push({
+      code: "vault_unfunded",
+      message: profile.settlement_backend === "arc-vault"
+        ? "The agent treasury vault holds no USDC. The owner must top it up before any payment can settle."
+        : "The funding account holds no USDC.",
+      owner_action_required: true,
+    });
+  }
+  const weeklyCap = BigInt(policy.weekly_cap_atto ?? "0");
+  const weeklySpent = BigInt(policy.weekly_spent_atto ?? "0");
+  if (weeklyCap > 0n && weeklySpent >= weeklyCap) {
+    blockers.push({
+      code: "weekly_cap_exhausted",
+      message: `The weekly cap of ${formatUnits(weeklyCap, decimals)} is fully spent. It resets seven days after the window opened.`,
+      owner_action_required: false,
+    });
+  }
+  return blockers;
+}
+
+/**
+ * What an agent is allowed to learn about its own policy.
+ *
+ * Deliberately excludes the caps, the remaining weekly budget, the policy text and the recipient
+ * whitelist. An agent that can read those can size a request to sit just under a cap, mirror the
+ * policy's own wording back in its justification, and enumerate approved recipients — in other
+ * words, tune itself past the controls instead of being governed by them. The owner still sees all
+ * of it through the owner endpoints.
+ *
+ * What remains is only what an agent needs to form a valid request: where it settles, which token
+ * and precision to use, and whether the binding is usable at all.
+ */
 export function publicPolicyState(policy: PolicyState) {
+  const profile = policySecurityProfile(policy);
   return {
-    contract_version: policy.contract_version ?? "",
+    contract_version: profile.contract_version,
     authorized_agent: policy.authorized_agent ?? "",
-    delegated_account: policy.delegated_account ?? "",
+    settlement_backend: profile.settlement_backend,
+    settlement_chain: chainToApi(Number(policy.evm_chain_id ?? 0)),
     token_address: policy.token_address ?? "",
-    evm_chain_id: policy.evm_chain_id ?? "",
-    per_tx_cap_atto: policy.per_tx_cap_atto ?? "0",
-    weekly_cap_atto: policy.weekly_cap_atto ?? "0",
-    weekly_spent_atto: policy.weekly_spent_atto ?? "0",
-    policy_text: policy.policy_text ?? "",
-    policy_nonce: policy.policy_nonce ?? "0",
-    whitelist_enabled: policy.whitelist_enabled === true,
-    whitelisted_recipients: policy.whitelisted_recipients ?? [],
-    delegation_registered: policy.delegation_registered === true,
-    settlement_backend: policy.settlement_backend ?? "delegated-7710",
-    vault_registered: policy.vault_registered === true,
-    allowed_destination_chains: policy.allowed_destination_chains ?? [],
-    security: policySecurityProfile(policy),
+    settlement_binding_registered: profile.settlement_binding_registered,
+    review: {
+      semantic_review_required_for_all_requests: profile.semantic_review_required_for_all_requests,
+      immediate_review_submission: profile.immediate_review_submission,
+    },
+    warnings: profile.warnings,
+    // Caps, weekly spend, policy text, recipient whitelist and the destination allowlist are
+    // withheld on purpose. A denial names its reason, so an agent still learns why a request was
+    // refused without being handed the thresholds to design around.
+    disclosure: "Policy thresholds, policy text and recipient lists are not exposed to agent keys. A denied request states its reason.",
   };
 }
+
 
 /**
  * Enforce the GenLayer policy allowlist.

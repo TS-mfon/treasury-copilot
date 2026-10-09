@@ -76,7 +76,16 @@ type FeedbackDocument = {
   created_at: string;
 };
 
+/** Owner-chosen display name for an agent policy. Presentation only; never authorizes anything. */
+type AgentLabelDocument = {
+  policy: string;
+  owner: string;
+  label: string;
+  updated_at: string;
+};
+
 type PilotCollections = {
+  labels: Collection<AgentLabelDocument>;
   requests: Collection<PilotRequestDocument>;
   events: Collection<PilotEventDocument>;
   rateLimits: Collection<RateLimitDocument>;
@@ -143,6 +152,10 @@ async function collections(): Promise<PilotCollections | null> {
         { key: { key: 1, window_start: 1 }, unique: true },
         { key: { expires_at: 1 }, expireAfterSeconds: 0 },
       ]),
+      db.collection<AgentLabelDocument>("agent_labels").createIndexes([
+        { key: { policy: 1 }, unique: true, name: "agent_label_policy" },
+        { key: { owner: 1 }, name: "agent_label_owner" },
+      ]),
       db.collection<FeedbackDocument>("pilot_feedback").createIndexes([
         { key: { created_at: -1 } },
         { key: { request_id: 1 } },
@@ -154,6 +167,7 @@ async function collections(): Promise<PilotCollections | null> {
   });
   await globalThis.__treasuryCopilotPilotIndexes;
   return {
+    labels: db.collection<AgentLabelDocument>("agent_labels"),
     requests: db.collection<PilotRequestDocument>("pilot_requests"),
     events: db.collection<PilotEventDocument>("pilot_events"),
     rateLimits: db.collection<RateLimitDocument>("pilot_rate_limits"),
@@ -374,4 +388,37 @@ export async function requirePilotAdmin() {
     throw new Error("Pilot operations access is not enabled for this owner");
   }
   return owner;
+}
+
+/**
+ * Store the owner's name for an agent policy.
+ *
+ * Scoped to the owner so one owner cannot rename another's agent. The label is display metadata: it
+ * never takes part in authorization, so a missing store degrades to showing the policy address
+ * rather than blocking anything.
+ */
+export async function setAgentLabel(input: { policy: string; owner: string; label: string }) {
+  const store = await collections();
+  if (!store) return false;
+  await store.labels.updateOne(
+    { policy: input.policy.toLowerCase() },
+    {
+      $set: {
+        policy: input.policy.toLowerCase(),
+        owner: input.owner.toLowerCase(),
+        label: input.label.slice(0, 64),
+        updated_at: new Date().toISOString(),
+      },
+    },
+    { upsert: true },
+  );
+  return true;
+}
+
+/** Labels for an owner's policies, keyed by lowercased policy address. */
+export async function agentLabelsForOwner(owner: string): Promise<Record<string, string>> {
+  const store = await collections();
+  if (!store) return {};
+  const rows = await store.labels.find({ owner: owner.toLowerCase() }).limit(200).toArray();
+  return Object.fromEntries(rows.map((row) => [row.policy, row.label]));
 }

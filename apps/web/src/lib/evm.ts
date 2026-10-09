@@ -245,3 +245,68 @@ export async function readExecutorGasBalance(key: SupportedChainKey, executor: A
     symbol: config.nativeSymbol,
   };
 }
+
+/**
+ * Move USDC from the owner's wallet into their agent treasury vault.
+ *
+ * This is the step a vault-settled chain needs and a delegation-settled chain does not. On Base the
+ * owner signs a permission and the USDC never leaves their account, so there is nothing to fund. On
+ * Arc the owner deploys a contract, and that contract starts empty — deploying it is not funding it.
+ * A registered, perfectly valid Arc policy will therefore refuse every payment until this runs.
+ */
+export async function fundVaultWithUsdc(
+  key: SupportedChainKey,
+  vault: Address,
+  amountUnits: bigint,
+) {
+  const config = SUPPORTED_CHAINS[key];
+  if (config.executionBackend !== "arc-vault") {
+    throw new Error(`${config.name} settles by delegation and has no vault to fund`);
+  }
+  if (amountUnits <= 0n) throw new Error("Enter an amount greater than zero");
+  const token = config.tokens.USDC?.address;
+  if (!token) throw new Error(`USDC is not configured for ${config.name}`);
+  if (!window.ethereum) throw new Error("A wallet is required");
+
+  const [account] = await window.ethereum.request({ method: "eth_requestAccounts" }) as Address[];
+  const publicClient = publicClientFor(key);
+
+  // Check the owner's own balance first, so an underfunded wallet fails here with a clear reason
+  // rather than as an opaque transfer revert.
+  const held = await publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [account],
+  }) as bigint;
+  if (held < amountUnits) {
+    const decimals = config.tokens.USDC?.decimals ?? 6;
+    throw new Error(
+      `Your wallet holds ${formatUnits(held, decimals)} USDC on ${config.name}, which is less than the ${formatUnits(amountUnits, decimals)} you are sending`,
+    );
+  }
+
+  const wallet = createWalletClient({ account, chain: config.viemChain, transport: custom(window.ethereum) });
+  const hash = await wallet.writeContract({
+    chain: config.viemChain,
+    address: token,
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [vault, amountUnits],
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error(`Funding transaction ${hash} reverted`);
+  return { hash, receipt };
+}
+
+/** Read a vault's spendable balance, for showing the owner what is actually in it. */
+export async function readVaultBalance(key: SupportedChainKey, vault: Address) {
+  const config = SUPPORTED_CHAINS[key];
+  const decimals = config.tokens.USDC?.decimals ?? 6;
+  const available = await publicClientFor(key).readContract({
+    address: vault,
+    abi: agentTreasuryAbi,
+    functionName: "availableBalance",
+  }) as bigint;
+  return { available, formatted: formatUnits(available, decimals), decimals };
+}
