@@ -12,6 +12,7 @@ import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { friendlyError } from "@/lib/errors";
 import { hashActionPayload, hashPolicyUpdateActionPayload } from "@/lib/ownerActions";
+import { useEnsureChain } from "@/lib/useEnsureChain";
 import { parseTokenAmount } from "@/lib/evm";
 
 interface PolicyRow {
@@ -35,6 +36,7 @@ interface PolicyRow {
 }
 
 export default function PolicyPage() {
+  const ensureChain = useEnsureChain();
   const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
@@ -94,6 +96,8 @@ export default function PolicyPage() {
         weeklyCapUnits: weeklyUnits.toString(),
         policyText: policyText.trim(),
       });
+      // The domain below is bound to the policy's own chain, so the wallet must be there first.
+      await ensureChain(Number(selected.binding.chain_id));
       const signature = await signTypedDataAsync({
         domain: buildOwnerActionDomain(Number(selected.binding.chain_id), registry as Address),
         types: ownerActionTypes,
@@ -150,6 +154,8 @@ export default function PolicyPage() {
       const payloadHash = action === "set_whitelist_enabled"
         ? hashActionPayload([whitelistEnabled])
         : hashActionPayload([whitelistRecipient.toLowerCase(), whitelistAllowed]);
+      // The domain below is bound to the policy's own chain, so the wallet must be there first.
+      await ensureChain(Number(selected.binding.chain_id));
       const signature = await signTypedDataAsync({
         domain: buildOwnerActionDomain(Number(selected.binding.chain_id), registry as Address),
         types: ownerActionTypes,

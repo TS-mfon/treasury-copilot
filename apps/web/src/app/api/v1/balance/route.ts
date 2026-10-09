@@ -1,6 +1,6 @@
 import { formatUnits } from "viem";
 import { bearerToken, verifyAgentApiKey } from "@/lib/apiAuth";
-import { assertPolicyMatchesApiKey, assertRegistryBinding, chainToApi, policySecurityProfile, readPolicyState } from "@/lib/apiServer";
+import { assertPolicyMatchesApiKey, assertRegistryBinding, chainToApi, policySecurityProfile, readPolicyState, spendBlockers } from "@/lib/apiServer";
 import { erc20Abi, chainById } from "@treasury-copilot/shared";
 import { createPublicClient, http } from "viem";
 import { apiErrorResponse } from "@/lib/errors";
@@ -23,7 +23,11 @@ export async function GET(request: Request) {
       args: [claims.delegatedAccount],
     }) as bigint;
     const decimals = claims.tokenDecimals ?? 6;
+    const blockers = spendBlockers(policy, balance, decimals);
     return Response.json({
+      // Top-level readiness, so a client never has to infer it from a nested warnings array.
+      ready_to_spend: blockers.length === 0,
+      blockers,
       owner: claims.owner,
       agent: claims.agent,
       policy: claims.policy,
@@ -47,6 +51,7 @@ export async function GET(request: Request) {
       ),
       per_tx_cap: formatUnits(BigInt(policy.per_tx_cap_atto ?? "0"), decimals),
       per_tx_cap_units: policy.per_tx_cap_atto ?? "0",
+      cap_boundary: "inclusive",
       security: policySecurityProfile(policy),
     });
   } catch (error) {

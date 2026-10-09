@@ -7,6 +7,7 @@ import {
   type Hex,
 } from "viem";
 import {
+  cctpDestinationChainIds,
   chainById,
   tokenForChainId,
   type SupportedTokenSymbol,
@@ -229,8 +230,15 @@ export async function POST(request: Request) {
         body.policyText,
         body.whitelist,
         body.settlementBackend,
-        // The constructor treats "none" as an empty list and always permits the settlement chain.
-        body.destinationChains === "" ? "none" : body.destinationChains,
+        // The owner does not curate payout chains. They fund the vault from whichever network suits
+        // them and the agent asks to be paid on whichever network suits it, so the policy permits
+        // every chain in its own Circle environment by default. Crossing environments is excluded
+        // because such a transfer would never be attested. An explicit destination_chains value
+        // still narrows this for an API caller that wants a tighter policy, and the owner can
+        // adjust it later with set_destination_chain_entry.
+        body.destinationChains === ""
+          ? (cctpDestinationChainIds(body.chainId).join(",") || "none")
+          : body.destinationChains,
       ]);
       policy = deployment.address;
       await genlayerWrite(registry, "register_policy", [

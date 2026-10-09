@@ -111,6 +111,29 @@ export function friendlyError(error: unknown) {
 
 function apiCode(message: string) {
   const value = message.toLowerCase();
+  // An empty or short treasury is the single most common operational blocker, and it is distinct
+  // from a malformed request. 402 Payment Required says exactly that: nothing is wrong with the
+  // call, there is simply no money behind it yet. (302 is an HTTP redirect, so it cannot carry
+  // this meaning without breaking clients that follow redirects.)
+  if (value.includes("vault") && (value.includes("no usdc") || value.includes("holds no") || value.includes("unfunded"))) {
+    return ["vault_unfunded", 402] as const;
+  }
+  if (value.includes("available but the request needs") || value.includes("insufficient available balance")) {
+    return ["insufficient_vault_balance", 402] as const;
+  }
+  if (value.includes("fee reserve")) return ["insufficient_fee_reserve", 402] as const;
+  if (value.includes("vault") && (value.includes("not registered") || value.includes("no registered") || value.includes("no agent treasury"))) {
+    return ["vault_not_registered", 409] as const;
+  }
+  // The deployment-level policy allowlist is a configuration gate, not a bad request. It was
+  // previously indistinguishable from any other failure as a generic request_failed/400.
+  if (value.includes("not allowed on this deployment")) return ["policy_not_allowed", 403] as const;
+  if (value.includes("arc settlement is disabled")) return ["settlement_disabled", 503] as const;
+  if (value.includes("payout destination only")) return ["unsupported_settlement_chain", 422] as const;
+  if (value.includes("cross-chain settlement unavailable")) return ["cross_chain_unavailable", 422] as const;
+  if (value.includes("is not a supported chain") || value.includes("destination_chain must be")) {
+    return ["unsupported_destination_chain", 422] as const;
+  }
   if (value.includes("agent") && value.includes("match")) return ["agent_mismatch", 403] as const;
   if (value.includes("bearer") || value.includes("api key")) return ["invalid_api_key", 401] as const;
   if (value.includes("policy") && value.includes("inactive")) return ["policy_inactive", 403] as const;
@@ -147,13 +170,22 @@ function apiCode(message: string) {
 export function apiErrorResponse(error: unknown, requestId?: string) {
   const message = friendlyError(error);
   const [code, status] = apiCode(message);
+  // request_id is always present. Some routes omitted it, which made the envelope inconsistent and
+  // left callers without a reference for the one failure they wanted to escalate.
+  // globalThis.crypto, not node:crypto: this module is also imported by client components, and a
+  // node: scheme import cannot be bundled for the browser.
+  const correlation = requestId ?? `corr_${globalThis.crypto.randomUUID()}`;
+  // 402 is a terminal operational state: the call was fine, the treasury is not funded. Retrying it
+  // unchanged cannot help, so it must not be advertised as retryable.
+  const retryable = status >= 500;
   return Response.json({
     error: code,
     message,
     fields: {},
-    ...(requestId ? { request_id: requestId } : {}),
-    retryable: status >= 500,
-  }, { status });
+    request_id: correlation,
+    retryable,
+    ...(status === 402 ? { owner_action_required: true } : {}),
+  }, { status, headers: { "x-correlation-id": correlation } });
 }
 
 /* -------------------------------------------------------------------------- */

@@ -1,7 +1,9 @@
 # Local review and fundraising artifacts are not part of the web deployment.
-investor_data_room/
-pitch-deck/
-Screenshots/
+# Directory patterns are anchored with a leading slash: an unanchored `docs/` also matched
+# apps/web/src/app/docs/ and removed the /docs route from the build.
+/investor_data_room/
+/pitch-deck/
+/Screenshots/
 Dave.png
 Dave.png:Zone.Identifier
 Funding.md
@@ -10,8 +12,12 @@ resolve-genlayer.mjs
 verify-genlayer.mjs
 AGENT.md
 *.Zone.Identifier
-contracts/
-docs/
+# contracts/genlayer/*.py is READ AT RUNTIME by deployTreasuryPolicy, so it must ship. Only the
+# Solidity side is build-time-only. Excluding all of contracts/ silently broke every policy
+# deployment with "Could not load TreasuryPolicy.py".
+/contracts/evm/
+/contracts/genlayer/__pycache__/
+/docs/
 *.pdf
 *.mp4
 *.pptx

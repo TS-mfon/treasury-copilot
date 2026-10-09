@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, Bot, BookOpen, Gauge, History, Menu, Settings, ShieldCheck, TerminalSquare, X } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, Bot, Coins, Gauge, History, Menu, Settings, ShieldCheck, TerminalSquare, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
 import { useOwnerSession } from "@/components/OwnerSessionProvider";
@@ -21,6 +21,7 @@ const ownerNav = [
   { href: "/admin", label: "Pilot Ops", icon: Activity },
   { href: "/history", label: "History", icon: History },
   { href: "/policy", label: "Policy", icon: Settings },
+  { href: "/top-up", label: "Top up", icon: Coins },
 ];
 
 export function LogoMark({ size = 38 }: { size?: number }) {

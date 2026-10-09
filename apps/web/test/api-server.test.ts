@@ -3,6 +3,7 @@ import test from "node:test";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AgentApiKeyClaims } from "../src/lib/apiAuth";
 import {
+  spendBlockers,
   assertPolicyMatchesApiKey,
   chainToApi,
   parseSpendPayload,
@@ -92,11 +93,87 @@ test("agent policy responses redact executable delegation secrets", () => {
     evm_chain_id: String(claims.chainId),
     per_tx_cap_atto: "25000000",
   });
-  assert.equal(state.delegation_registered, true);
-  assert.equal(state.per_tx_cap_atto, "25000000");
-  assert.equal("delegation_payload" in state, false);
-  assert.equal("delegation_context" in state, false);
-  assert.equal("auto_approve_threshold_atto" in state, false);
+  // The agent learns where it settles and whether the binding is usable.
+  assert.equal(state.settlement_binding_registered, true);
+  assert.equal(state.settlement_chain?.chain_id, claims.chainId);
+  assert.equal(state.token_address, claims.token);
+
+  // It must not learn anything it could tune a request against. Caps let an agent size a payment to
+  // sit just under the limit, policy text lets it mirror the owner's wording back as justification,
+  // and the recipient list lets it enumerate approved payees.
+  for (const leaked of [
+    "per_tx_cap_atto",
+    "weekly_cap_atto",
+    "weekly_spent_atto",
+    "policy_text",
+    "whitelist_enabled",
+    "whitelisted_recipients",
+    "allowed_destination_chains",
+    "policy_nonce",
+    "delegated_account",
+    "vault_address",
+    "delegation_payload",
+    "delegation_context",
+    "auto_approve_threshold_atto",
+  ]) {
+    assert.equal(leaked in state, false, `${leaked} must not be exposed to an agent key`);
+  }
+});
+
+test("a vault-settled policy is not warned about a missing delegation", () => {
+  // Arc has no ERC-7715 delegation and never will, so reporting one as missing read as a hard
+  // blocker on a binding that was actually complete.
+  const arcProfile = policySecurityProfile({
+    contract_version: "6",
+    settlement_backend: "arc-vault",
+    vault_registered: true,
+    vault_address: "0xb121b87cf9e30293eb619b7ebc0554dfd3018cc2",
+    auto_approve_threshold_atto: "0",
+  });
+  assert.equal(arcProfile.settlement_backend, "arc-vault");
+  assert.equal(arcProfile.settlement_binding_registered, true);
+  assert.deepEqual(arcProfile.warnings, []);
+
+  // An unregistered vault is still a real blocker, named for the backend it belongs to.
+  const unbound = policySecurityProfile({
+    contract_version: "6",
+    settlement_backend: "arc-vault",
+    auto_approve_threshold_atto: "0",
+  });
+  assert.equal(unbound.settlement_binding_registered, false);
+  assert.ok(unbound.warnings.some((w) => w.includes("vault")));
+  assert.ok(!unbound.warnings.some((w) => w.includes("delegation")));
+
+  // A delegation-settled policy keeps the original check.
+  const delegated = policySecurityProfile({
+    contract_version: "6",
+    settlement_backend: "delegated-7710",
+    auto_approve_threshold_atto: "0",
+  });
+  assert.ok(delegated.warnings.some((w) => w.includes("delegation")));
+});
+
+test("blockers name what is wrong and who has to fix it", () => {
+  const arc = {
+    contract_version: "6",
+    settlement_backend: "arc-vault",
+    vault_registered: true,
+    vault_address: "0xb121b87cf9e30293eb619b7ebc0554dfd3018cc2",
+    auto_approve_threshold_atto: "0",
+    weekly_cap_atto: "10000000",
+    weekly_spent_atto: "0",
+  };
+
+  // An unfunded vault is the blocker the agent actually hit, and only the owner can clear it.
+  const unfunded = spendBlockers(arc, 0n, 6);
+  assert.ok(unfunded.some((b) => b.code === "vault_unfunded" && b.owner_action_required));
+
+  // A funded, bound policy has nothing blocking it.
+  assert.deepEqual(spendBlockers(arc, 5_000_000n, 6), []);
+
+  // An exhausted weekly cap is not an owner problem; it clears on its own.
+  const exhausted = spendBlockers({ ...arc, weekly_spent_atto: "10000000" }, 5_000_000n, 6);
+  assert.ok(exhausted.some((b) => b.code === "weekly_cap_exhausted" && !b.owner_action_required));
 });
 
 test("legacy fast approval is surfaced as an explicit security warning", () => {

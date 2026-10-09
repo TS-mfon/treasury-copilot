@@ -1,6 +1,7 @@
 import { getAddress, isAddress, type Address } from "viem";
 import { genlayerRead } from "@/lib/genlayerServer";
 import { readPolicyState, type RegistryBinding } from "@/lib/apiServer";
+import { agentLabelsForOwner } from "@/lib/pilotStore";
 import { requireOwnerSession } from "@/lib/ownerSession";
 
 export const runtime = "nodejs";
@@ -23,9 +24,12 @@ export async function GET() {
     const activeBindings = bindings.filter(({ binding }) => (
       binding.active && binding.owner.toLowerCase() === owner.toLowerCase()
     ));
+    // Labels are display metadata, so a store outage must not hide an owner's policies.
+    const labels = await agentLabelsForOwner(owner).catch(() => ({} as Record<string, string>));
     const rows = await Promise.all(activeBindings.map(async ({ policy, binding }) => ({
       policy,
       binding,
+      label: labels[policy.toLowerCase()] ?? null,
       state: await readPolicyState(policy),
     })));
     return Response.json({ owner, policies: rows });
