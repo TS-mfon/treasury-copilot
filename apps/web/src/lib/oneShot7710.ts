@@ -4,6 +4,7 @@ import { redelegatePermissionContextAction } from "@metamask/smart-accounts-kit/
 import { createWalletClient, encodeFunctionData, http, isAddress, isHex, numberToHex, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia, base, baseSepolia } from "viem/chains";
+import { chainById, ONE_SHOT_RELAYER_TESTNET } from "@treasury-copilot/shared";
 
 const erc20Abi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 
@@ -33,11 +34,36 @@ export interface OneShotExecutionResult {
   fee_amount_units?: string;
 }
 
-function oneShotRpcUrl() {
+/**
+ * The relayer that serves a given chain.
+ *
+ * 1Shot runs two relayers and they are split by environment, confirmed by calling
+ * `relayer_getCapabilities` on each: production answers for Ethereum, Base, Arbitrum, OP and
+ * Polygon mainnet and returns `{}` for Base Sepolia, while dev answers for Base Sepolia and
+ * returns `{}` for every mainnet. So a single URL cannot serve both Base Sepolia and Base
+ * Mainnet, and this resolves per chain.
+ *
+ * The registry deliberately takes precedence over `ONE_SHOT_RELAYER_URL`. That variable was set
+ * to the dev relayer in production, so letting it win would have sent Base Mainnet to a relayer
+ * that does not serve it and failed every mainnet payout with "unsupported on this network" —
+ * a global setting cannot be correct for a value that differs per chain.
+ *
+ * The variable is still honoured for any chain the registry does not name, which is what an
+ * operator pointing at their own relayer actually needs: it covers the chains we have no verified
+ * answer for, and cannot override the ones we do.
+ */
+function oneShotRpcUrl(chainId?: string) {
+  if (chainId) {
+    const configured = chainById(Number(chainId))?.relayerUrl;
+    if (configured) return configured;
+  }
   return process.env.ONE_SHOT_RELAYER_URL
     ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
-    ?? "https://relayer.1shotapi.dev/relayers";
+    ?? ONE_SHOT_RELAYER_TESTNET;
 }
+
+/** Exposed for the relayer-resolution test, which must not reach the network. */
+export const __resolveRelayerUrl = oneShotRpcUrl;
 
 function platformPrivateKey() {
   const key = process.env.AGENT_SIGNER_PRIVATE_KEY;
@@ -52,11 +78,6 @@ function viemChain(chainId: string) {
   throw new Error(`unsupported delegated execution chain ${chainId}`);
 }
 
-function isXLayerChain(chainId: string) {
-  const id = Number(chainId);
-  return id === 196 || id === 195 || id === 194;
-}
-
 async function requireChainCapability(chainId: string) {
   const capabilities = await getCapabilities(chainId).catch((error) => {
     throw new Error(`1Shot capability check failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -65,23 +86,12 @@ async function requireChainCapability(chainId: string) {
   if (!capabilityValue || typeof capabilityValue !== "object") {
     throw new Error("1Shot execution is unsupported on this network");
   }
-  if (isXLayerChain(chainId) && !isNativeMessageSupported(capabilityValue)) {
-    throw new Error("1Shot does not support native OKB on X Layer yet");
-  }
   return capabilityValue as Record<string, unknown>;
 }
 
-function isNativeMessageSupported(capabilities: unknown) {
-  if (!capabilities || typeof capabilities !== "object") return false;
-  const record = capabilities as Record<string, unknown>;
-  const messages = record.messages as Record<string, unknown> | undefined;
-  if (!messages) return false;
-  const native = messages.native as Record<string, unknown> | undefined;
-  return Boolean(native && Object.keys(native).length > 0);
-}
 
-async function rpcCall<T>(method: string, params: unknown): Promise<T> {
-  const response = await fetch(oneShotRpcUrl(), {
+async function rpcCall<T>(method: string, params: unknown, chainId?: string): Promise<T> {
+  const response = await fetch(oneShotRpcUrl(chainId), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
@@ -97,7 +107,7 @@ async function rpcCall<T>(method: string, params: unknown): Promise<T> {
 }
 
 async function getCapabilities(chainId: string) {
-  return await rpcCall<Record<string, unknown>>("relayer_getCapabilities", [chainId]);
+  return await rpcCall<Record<string, unknown>>("relayer_getCapabilities", [chainId], chainId);
 }
 
 function formatDelegationChain(delegationPayload: unknown): unknown[] {
@@ -165,7 +175,7 @@ function encodeErc20Transfer(recipient: Address, amount: bigint) {
 }
 
 async function directPost(body: OneShotRelayRequest): Promise<OneShotExecutionResult> {
-  const response = await fetch(oneShotRpcUrl(), {
+  const response = await fetch(oneShotRpcUrl(body.chain_id), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -182,10 +192,11 @@ async function directPost(body: OneShotRelayRequest): Promise<OneShotExecutionRe
   return { tx_hash: txHash, raw: data, mode: "direct" };
 }
 
-async function pollStatus(taskId: string): Promise<Hex> {
+async function pollStatus(taskId: string, chainId: string): Promise<Hex> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2_500));
-    const status = await rpcCall<Record<string, unknown>>("relayer_getStatus", { id: taskId, logs: false });
+    // A task id only exists on the relayer that accepted it, so this must poll the same one.
+    const status = await rpcCall<Record<string, unknown>>("relayer_getStatus", { id: taskId, logs: false }, chainId);
     const rawStatus = String(status.status ?? "");
     const txHash = String((status.receipt as Record<string, unknown> | undefined)?.transactionHash ?? status.hash ?? status.txHash ?? status.transactionHash ?? "");
     if ((rawStatus === "200" || rawStatus.toLowerCase() === "confirmed") && isHex(txHash, { strict: true })) return txHash;
@@ -207,7 +218,7 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
     rpcCall<{ feeCollector?: Address; targetAddress?: Address }>("relayer_getFeeData", {
       chainId: body.chain_id,
       token: body.token,
-    }),
+    }, body.chain_id),
   ]);
   const relayerTarget = feeData.targetAddress
     ?? (capability.targetAddress as Address | undefined)
@@ -284,7 +295,7 @@ async function execute7710(body: OneShotRelayRequest): Promise<OneShotExecutionR
   });
   const taskId = typeof sendResult === "string" ? sendResult : (sendResult.taskId ?? sendResult.result ?? sendResult.id);
   if (!taskId) throw new Error(`1Shot send response missing task id: ${JSON.stringify(sendResult).slice(0, 240)}`);
-  const txHash = await pollStatus(taskId);
+  const txHash = await pollStatus(taskId, body.chain_id);
   return {
     tx_hash: txHash,
     raw: { taskId, relayerTarget, feeCollector, sendResult },

@@ -2,32 +2,75 @@ import { defineChain, type Abi, type Address, type Chain, type Hex, type TypedDa
 import {
   arbitrum,
   arbitrumSepolia,
+  avalanche,
+  avalancheFuji,
   base,
   baseSepolia,
+  codex,
+  codexTestnet,
+  hyperEvm,
+  ink,
+  inkSepolia,
+  linea,
+  lineaSepolia,
   mainnet,
+  monad,
+  monadTestnet,
   optimism,
   optimismSepolia,
+  // viem also exports `plume`, which is "Plume (Legacy)" (98865) with a dead RPC. The live
+  // chain is 98866.
+  plumeMainnet,
   polygon,
   polygonAmoy,
+  sei,
+  seiTestnet,
   sepolia,
+  sonic,
+  unichain,
+  unichainSepolia,
+  worldchain,
+  worldchainSepolia,
+  xdc,
 } from "viem/chains";
 
 export type SupportedChainKey =
+  // Settlement chains: a policy can be bound to these and pay out of them.
   | "baseSepolia"
   | "base"
   | "arbitrumSepolia"
-  | "xLayer"
-  | "xLayerTestnet"
   | "arcTestnet"
   | "arc"
+  // CCTP payout destinations: an approved payment can be delivered here, but no treasury lives
+  // here. See `destinationOnly`.
   | "ethereum"
   | "ethereumSepolia"
+  | "avalanche"
+  | "avalancheFuji"
   | "optimism"
   | "optimismSepolia"
   | "arbitrum"
   | "polygon"
-  | "polygonAmoy";
-export type SupportedTokenSymbol = "USDC" | "OKB";
+  | "polygonAmoy"
+  | "unichain"
+  | "unichainSepolia"
+  | "linea"
+  | "lineaSepolia"
+  | "codex"
+  | "codexTestnet"
+  | "sonic"
+  | "worldchain"
+  | "worldchainSepolia"
+  | "monad"
+  | "monadTestnet"
+  | "sei"
+  | "seiTestnet"
+  | "xdc"
+  | "hyperEvm"
+  | "ink"
+  | "inkSepolia"
+  | "plume";
+export type SupportedTokenSymbol = "USDC";
 
 /**
  * How an approved payout actually reaches the chain.
@@ -69,6 +112,16 @@ export interface ChainConfig {
   usdcAddress: Address | undefined;
   tokens: Partial<Record<SupportedTokenSymbol, TokenConfig>>;
   executionBackend: ExecutionBackend;
+  /**
+   * 1Shot relayer that serves this chain, for `delegated-7710` settlement.
+   *
+   * This cannot be a single global setting. 1Shot runs two relayers and they are split by
+   * environment: the production relayer serves mainnets (Ethereum, Base, Arbitrum, OP, Polygon)
+   * and returns `{}` for Base Sepolia, while the dev relayer serves Base Sepolia and returns
+   * `{}` for every mainnet. One URL for the whole app therefore cannot support both Base
+   * Sepolia and Base Mainnet, which is why the relayer is resolved per chain.
+   */
+  relayerUrl?: string;
   /** Undefined when CCTP does not support the chain, which disables cross-chain routes. */
   cctp?: CctpConfig;
   /** AgentTreasuryFactory, only meaningful for `arc-vault` chains. */
@@ -103,19 +156,61 @@ const CCTP_MAINNET = {
   attestationApiUrl: "https://iris-api.circle.com",
 } as const;
 
-/** CCTP domain ids, which are independent of EVM chain ids. */
+/**
+ * CCTP domain ids, which are independent of EVM chain ids.
+ *
+ * Only domains Circle's **Forwarding Service** will deliver to are listed. Treasury Copilot's
+ * vault calls `depositForBurnWithHook` with the forwarding hook so Circle performs the
+ * destination mint; without forwarding we would need an executor key and gas on the destination
+ * chain, which we do not have. X Layer (domain 37) is the concrete exclusion: CCTP supports it,
+ * forwarding does not. `scripts/verify-cctp-candidates.mts` asserts this against Circle's live
+ * fee API and keeps X Layer as a negative control.
+ */
 export const CCTP_DOMAIN = {
   ethereum: 0,
+  avalanche: 1,
   optimism: 2,
   arbitrum: 3,
   base: 6,
   polygon: 7,
+  unichain: 10,
+  linea: 11,
+  codex: 12,
+  sonic: 13,
+  worldchain: 14,
+  monad: 15,
+  sei: 16,
+  xdc: 18,
+  hyperEvm: 19,
+  ink: 21,
+  plume: 22,
   arc: 26,
-  xLayer: 37,
 } as const;
+
+/**
+ * 1Shot relayer endpoints, verified by calling `relayer_getCapabilities` on each.
+ *
+ * Production answers for chain 1, 8453, 42161, 10 and 137. Dev answers for 84532. Neither
+ * answers for Arbitrum Sepolia (421614), so a delegation there cannot execute no matter how the
+ * allowlist is set — `requireChainCapability` reports that at the boundary.
+ */
+export const ONE_SHOT_RELAYER_MAINNET = "https://relayer.1shotapi.com/relayers";
+export const ONE_SHOT_RELAYER_TESTNET = "https://relayer.1shotapi.dev/relayers";
 
 /** Arc's canonical USDC ERC-20 interface. Reports 6 decimals; native USDC gas uses 18. */
 export const ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000" as Address;
+
+/**
+ * Canonical USDC addresses for the settlement chains.
+ *
+ * These were read off each chain (contract exists, `decimals() == 6`, `symbol() == "USDC"`) by
+ * `scripts/verify-cctp-candidates.mts`, and the Base Mainnet value is the one 1Shot's production
+ * relayer independently advertises. Kept as defaults so a missing env var cannot silently leave a
+ * chain with no token address; the env var still overrides.
+ */
+export const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
+export const BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
+export const ARBITRUM_SEPOLIA_USDC = "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d" as Address;
 
 /** Arc rejects transactions below a 20 Gwei maxFeePerGas. */
 export const ARC_MIN_MAX_FEE_PER_GAS = 20_000_000_000n;
@@ -144,30 +239,6 @@ export const arc = defineChain({
   },
   blockExplorers: {
     default: { name: "Arc Explorer", url: "https://explorer.arc.io" },
-  },
-});
-
-export const xLayer = defineChain({
-  id: 196,
-  name: "X Layer",
-  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
-  rpcUrls: {
-    default: { http: [process.env.NEXT_PUBLIC_X_LAYER_RPC_URL ?? "https://rpc.xlayer.tech"] },
-  },
-  blockExplorers: {
-    default: { name: "OKLink", url: "https://www.oklink.com/xlayer" },
-  },
-});
-
-export const xLayerTestnet = defineChain({
-  id: 1952,
-  name: "X Layer Testnet",
-  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
-  rpcUrls: {
-    default: { http: [process.env.NEXT_PUBLIC_X_LAYER_TESTNET_RPC_URL ?? "https://testrpc.xlayer.tech"] },
-  },
-  blockExplorers: {
-    default: { name: "OKLink", url: "https://www.oklink.com/xlayer-test" },
   },
 });
 
@@ -217,10 +288,11 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeDecimals: 18,
     viemChain: baseSepolia,
     executionBackend: "delegated-7710",
+    relayerUrl: ONE_SHOT_RELAYER_TESTNET,
     cctp: { domain: CCTP_DOMAIN.base, ...CCTP_TESTNET },
-    usdcAddress: process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined,
+    usdcAddress: (process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined) ?? BASE_SEPOLIA_USDC,
     tokens: {
-      USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC_DECIMALS ?? 6)),
+      USDC: token("USDC", (process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC as Address | undefined) ?? BASE_SEPOLIA_USDC, Number(process.env.NEXT_PUBLIC_BASE_SEPOLIA_USDC_DECIMALS ?? 6)),
     },
   },
   base: {
@@ -232,10 +304,11 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeDecimals: 18,
     viemChain: base,
     executionBackend: "delegated-7710",
+    relayerUrl: ONE_SHOT_RELAYER_MAINNET,
     cctp: { domain: CCTP_DOMAIN.base, ...CCTP_MAINNET },
-    usdcAddress: process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined,
+    usdcAddress: (process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined) ?? BASE_USDC,
     tokens: {
-      USDC: token("USDC", process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_BASE_USDC_DECIMALS ?? 6)),
+      USDC: token("USDC", (process.env.NEXT_PUBLIC_BASE_USDC as Address | undefined) ?? BASE_USDC, Number(process.env.NEXT_PUBLIC_BASE_USDC_DECIMALS ?? 6)),
     },
   },
   arbitrumSepolia: {
@@ -247,41 +320,12 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     nativeDecimals: 18,
     viemChain: arbitrumSepolia,
     executionBackend: "delegated-7710",
+    // No 1Shot relayer answers for 421614 in either environment, so a delegation here cannot
+    // execute. Left unset deliberately rather than pointed at a relayer that returns `{}`.
     cctp: { domain: CCTP_DOMAIN.arbitrum, ...CCTP_TESTNET },
-    usdcAddress: process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined,
+    usdcAddress: (process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined) ?? ARBITRUM_SEPOLIA_USDC,
     tokens: {
-      USDC: token("USDC", process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC_DECIMALS ?? 6)),
-    },
-  },
-  xLayer: {
-    key: "xLayer",
-    name: "X Layer",
-    chainId: 196,
-    explorerUrl: "https://www.oklink.com/xlayer",
-    nativeSymbol: "OKB",
-    nativeDecimals: 18,
-    viemChain: xLayer,
-    executionBackend: "delegated-7710",
-    cctp: { domain: CCTP_DOMAIN.xLayer, ...CCTP_MAINNET },
-    usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined,
-    tokens: {
-      USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_USDC_DECIMALS ?? 6)),
-      OKB: token("OKB", undefined, 18, "native"),
-    },
-  },
-  xLayerTestnet: {
-    key: "xLayerTestnet",
-    name: "X Layer Testnet",
-    chainId: 1952,
-    explorerUrl: "https://www.oklink.com/xlayer-test",
-    nativeSymbol: "OKB",
-    nativeDecimals: 18,
-    viemChain: xLayerTestnet,
-    executionBackend: "delegated-7710",
-    usdcAddress: process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined,
-    tokens: {
-      USDC: token("USDC", process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC as Address | undefined, Number(process.env.NEXT_PUBLIC_X_LAYER_TESTNET_USDC_DECIMALS ?? 6)),
-      OKB: token("OKB", undefined, 18, "native"),
+      USDC: token("USDC", (process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC as Address | undefined) ?? ARBITRUM_SEPOLIA_USDC, Number(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_USDC_DECIMALS ?? 6)),
     },
   },
   arcTestnet: {
@@ -323,7 +367,14 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
     minMaxFeePerGas: ARC_MIN_MAX_FEE_PER_GAS,
   },
   // --- CCTP payout destinations -----------------------------------------------------------------
-  // Addresses and domains are Circle's published values; see docs/arc.md.
+  // Every entry here is verified by scripts/verify-cctp-candidates.mts, which checks three
+  // independent things against the thing itself: Circle's live fee API returns a forwarding fee
+  // for the route, the USDC address is a real contract reporting 6 decimals when read on chain,
+  // and viem has a chain definition whose RPC answers. X Layer is kept in that script as a
+  // negative control and is expected to fail, because CCTP supports it but forwarding does not.
+  //
+  // Sonic has no testnet entry on purpose: Circle publishes two testnet USDC addresses for Sonic
+  // and neither verified against any public Blaze RPC, so it would be a guess.
   ethereum: destinationChain(
     "ethereum", "Ethereum", mainnet, "https://etherscan.io",
     "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", CCTP_DOMAIN.ethereum, CCTP_MAINNET,
@@ -331,6 +382,14 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   ethereumSepolia: destinationChain(
     "ethereumSepolia", "Ethereum Sepolia", sepolia, "https://sepolia.etherscan.io",
     "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", CCTP_DOMAIN.ethereum, CCTP_TESTNET,
+  ),
+  avalanche: destinationChain(
+    "avalanche", "Avalanche", avalanche, "https://snowtrace.io",
+    "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", CCTP_DOMAIN.avalanche, CCTP_MAINNET,
+  ),
+  avalancheFuji: destinationChain(
+    "avalancheFuji", "Avalanche Fuji", avalancheFuji, "https://testnet.snowtrace.io",
+    "0x5425890298aed601595a70AB815c96711a31Bc65", CCTP_DOMAIN.avalanche, CCTP_TESTNET,
   ),
   optimism: destinationChain(
     "optimism", "OP Mainnet", optimism, "https://optimistic.etherscan.io",
@@ -351,6 +410,78 @@ export const SUPPORTED_CHAINS: Record<SupportedChainKey, ChainConfig> = {
   polygonAmoy: destinationChain(
     "polygonAmoy", "Polygon Amoy", polygonAmoy, "https://amoy.polygonscan.com",
     "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", CCTP_DOMAIN.polygon, CCTP_TESTNET,
+  ),
+  unichain: destinationChain(
+    "unichain", "Unichain", unichain, "https://uniscan.xyz",
+    "0x078D782b760474a361dDA0AF3839290b0EF57AD6", CCTP_DOMAIN.unichain, CCTP_MAINNET,
+  ),
+  unichainSepolia: destinationChain(
+    "unichainSepolia", "Unichain Sepolia", unichainSepolia, "https://unichain-sepolia.blockscout.com",
+    "0x31d0220469e10c4E71834a79b1f276d740d3768F", CCTP_DOMAIN.unichain, CCTP_TESTNET,
+  ),
+  linea: destinationChain(
+    "linea", "Linea", linea, "https://lineascan.build",
+    "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", CCTP_DOMAIN.linea, CCTP_MAINNET,
+  ),
+  lineaSepolia: destinationChain(
+    "lineaSepolia", "Linea Sepolia", lineaSepolia, "https://sepolia.lineascan.build",
+    "0xFEce4462D57bD51A6A552365A011b95f0E16d9B7", CCTP_DOMAIN.linea, CCTP_TESTNET,
+  ),
+  codex: destinationChain(
+    "codex", "Codex", codex, "https://explorer.codex.xyz",
+    "0xd996633a415985DBd7D6D12f4A4343E31f5037cf", CCTP_DOMAIN.codex, CCTP_MAINNET,
+  ),
+  codexTestnet: destinationChain(
+    "codexTestnet", "Codex Testnet", codexTestnet, "https://explorer.codex-stg.xyz",
+    "0x6d7f141b6819C2c9CC2f818e6ad549E7Ca090F8f", CCTP_DOMAIN.codex, CCTP_TESTNET,
+  ),
+  sonic: destinationChain(
+    "sonic", "Sonic", sonic, "https://sonicscan.org",
+    "0x29219dd400f2Bf60E5a23d13Be72B486D4038894", CCTP_DOMAIN.sonic, CCTP_MAINNET,
+  ),
+  worldchain: destinationChain(
+    "worldchain", "World Chain", worldchain, "https://worldscan.org",
+    "0x79A02482A880bCe3F13E09da970dC34dB4cD24D1", CCTP_DOMAIN.worldchain, CCTP_MAINNET,
+  ),
+  worldchainSepolia: destinationChain(
+    "worldchainSepolia", "World Chain Sepolia", worldchainSepolia, "https://sepolia.worldscan.org",
+    "0x66145f38cBAC35Ca6F1Dfb4914dF98F1614aeA88", CCTP_DOMAIN.worldchain, CCTP_TESTNET,
+  ),
+  monad: destinationChain(
+    "monad", "Monad", monad, "https://monadvision.com",
+    "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", CCTP_DOMAIN.monad, CCTP_MAINNET,
+  ),
+  monadTestnet: destinationChain(
+    "monadTestnet", "Monad Testnet", monadTestnet, "https://testnet.monadexplorer.com",
+    "0x534b2f3A21130d7a60830c2Df862319e593943A3", CCTP_DOMAIN.monad, CCTP_TESTNET,
+  ),
+  sei: destinationChain(
+    "sei", "Sei", sei, "https://seiscan.io",
+    "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", CCTP_DOMAIN.sei, CCTP_MAINNET,
+  ),
+  seiTestnet: destinationChain(
+    "seiTestnet", "Sei Testnet", seiTestnet, "https://testnet.seiscan.io",
+    "0x4fCF1784B31630811181f670Aea7A7bEF803eaED", CCTP_DOMAIN.sei, CCTP_TESTNET,
+  ),
+  xdc: destinationChain(
+    "xdc", "XDC", xdc, "https://xdcscan.com",
+    "0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1", CCTP_DOMAIN.xdc, CCTP_MAINNET,
+  ),
+  hyperEvm: destinationChain(
+    "hyperEvm", "HyperEVM", hyperEvm, "https://hyperscan.com",
+    "0xb88339CB7199b77E23DB6E890353E22632Ba630f", CCTP_DOMAIN.hyperEvm, CCTP_MAINNET,
+  ),
+  ink: destinationChain(
+    "ink", "Ink", ink, "https://explorer.inkonchain.com",
+    "0x2D270e6886d130D724215A266106e6832161EAEd", CCTP_DOMAIN.ink, CCTP_MAINNET,
+  ),
+  inkSepolia: destinationChain(
+    "inkSepolia", "Ink Sepolia", inkSepolia, "https://explorer-sepolia.inkonchain.com",
+    "0xFabab97dCE620294D2B0b0e46C68964e326300Ac", CCTP_DOMAIN.ink, CCTP_TESTNET,
+  ),
+  plume: destinationChain(
+    "plume", "Plume", plumeMainnet, "https://explorer.plume.org",
+    "0x222365EF19F7947e5484218551B56bb3965Aa7aF", CCTP_DOMAIN.plume, CCTP_MAINNET,
   ),
 };
 

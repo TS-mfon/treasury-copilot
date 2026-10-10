@@ -286,33 +286,121 @@ function modeRegistryBinding() {
   );
 }
 
-async function modeMainnetOff() {
+/**
+ * Arc mainnet is now enabled, so the gate asserts it is enabled *correctly* rather than absent.
+ *
+ * The previous version of this check asserted mainnet was off. Enabling it would have been a
+ * one-line allowlist edit that quietly contradicted a passing gate, so the gate was rewritten to
+ * assert the properties that actually make real-fund settlement safe:
+ *
+ *   - the configured factory is the one deployed on chain, and its implementation and
+ *     TokenMessenger are what we expect (read from Arc, not from this file);
+ *   - mainnet has its own executor key, distinct from the testnet executor and from the platform
+ *     signer, so a testnet key can never sign a real payout;
+ *   - the testnet path still works, so turning mainnet on did not take testnet with it.
+ */
+async function modeMainnetOn() {
   const env = loadEnvLocal();
   const allowed = (env.ALLOWED_EVM_CHAIN_IDS ?? "").split(",").map((value) => value.trim());
-  check(!allowed.includes(String(ARC_MAINNET)), "Arc mainnet is present in ALLOWED_EVM_CHAIN_IDS");
+  check(allowed.includes(String(ARC_MAINNET)), "Arc mainnet is missing from ALLOWED_EVM_CHAIN_IDS");
   check(allowed.includes(String(ARC_TESTNET)), "Arc Testnet is missing from ALLOWED_EVM_CHAIN_IDS");
 
-  // No mainnet vault factory may be configured, or an owner could deploy against real funds.
-  check(!env.NEXT_PUBLIC_ARC_VAULT_FACTORY, "an Arc mainnet vault factory is configured");
+  const factory = env.NEXT_PUBLIC_ARC_VAULT_FACTORY;
+  check(Boolean(factory), "NEXT_PUBLIC_ARC_VAULT_FACTORY is not set");
 
-  const { SUPPORTED_CHAINS } = await import("@treasury-copilot/shared");
-  check(
-    SUPPORTED_CHAINS.arc.vaultFactory === undefined,
-    "the Arc mainnet chain config carries a vault factory",
-  );
-
-  // The deployed app must not advertise Arc mainnet as an enabled settlement chain.
-  const url = existsSync("docs/arc-deployment-url.txt")
-    ? readFileSync("docs/arc-deployment-url.txt", "utf8").trim()
-    : undefined;
-  if (url) {
-    const response = await fetch(new URL("/api/health", url), { cache: "no-store" });
-    const body = await response.json() as { settlement_chains?: Array<Record<string, unknown>> };
-    const mainnet = (body.settlement_chains ?? []).find((chain) => chain.chain_id === ARC_MAINNET);
-    check(!mainnet, "the deployed app advertises Arc mainnet as a settlement chain");
+  // The registry reads NEXT_PUBLIC_* at module load, so hydrate the environment before importing
+  // it — otherwise the chain config looks unconfigured here while being correct in the app.
+  for (const [key, value] of Object.entries(env)) {
+    if (process.env[key] === undefined) process.env[key] = value;
   }
 
-  console.log(`arc mainnet disabled: allowlist=${allowed.join(",")} factory=unset`);
+  const { createPublicClient, http, getAddress } = await import("viem");
+  const { SUPPORTED_CHAINS, CCTP_DOMAIN } = await import("@treasury-copilot/shared");
+  const chain = SUPPORTED_CHAINS.arc;
+
+  check(chain.chainId === ARC_MAINNET, `arc chain config reports ${chain.chainId}`);
+  check(chain.executionBackend === "arc-vault", "Arc mainnet does not use the vault backend");
+  check(chain.cctp?.domain === CCTP_DOMAIN.arc, "Arc mainnet CCTP domain is wrong");
+  check(
+    chain.vaultFactory?.toLowerCase() === factory!.toLowerCase(),
+    `chain config factory ${chain.vaultFactory} != env ${factory}`,
+  );
+
+  const rpc = env.ARC_RPC_URL ?? env.NEXT_PUBLIC_ARC_RPC_URL;
+  const client = createPublicClient({ chain: chain.viemChain, transport: http(rpc) });
+
+  const liveChainId = await client.getChainId();
+  check(liveChainId === ARC_MAINNET, `RPC reports chain ${liveChainId}, expected ${ARC_MAINNET}`);
+
+  const factoryAbi = [
+    { name: "treasuryImplementation", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+    { name: "tokenMessenger", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  ] as const;
+
+  const address = getAddress(factory!);
+  const code = await client.getCode({ address });
+  check(Boolean(code && code !== "0x"), `no contract at factory ${address}`);
+
+  const [implementation, tokenMessenger] = await Promise.all([
+    client.readContract({ address, abi: factoryAbi, functionName: "treasuryImplementation" }),
+    client.readContract({ address, abi: factoryAbi, functionName: "tokenMessenger" }),
+  ]);
+  check(
+    tokenMessenger.toLowerCase() === chain.cctp!.tokenMessenger.toLowerCase(),
+    `factory TokenMessenger ${tokenMessenger} != registry ${chain.cctp!.tokenMessenger}`,
+  );
+
+  // The implementation must be locked, so only clones are usable. A callable implementation would
+  // let anyone initialize it and present it as a vault.
+  const implCode = await client.getCode({ address: implementation });
+  check(Boolean(implCode && implCode !== "0x"), `no contract at implementation ${implementation}`);
+  let locked = false;
+  try {
+    await client.readContract({
+      address: implementation,
+      abi: [{ name: "initialize", type: "function", stateMutability: "nonpayable",
+        inputs: [{ type: "address" }, { type: "address" }, { type: "address" }, { type: "address" }], outputs: [] }] as const,
+      functionName: "initialize",
+      args: [implementation, implementation, chain.usdcAddress!, chain.cctp!.tokenMessenger],
+    });
+  } catch (error) {
+    locked = /already initialized/i.test(String(error));
+  }
+  check(locked, "the Arc mainnet implementation is not locked against direct initialize");
+
+  // Signer separation. Mainnet must not borrow the testnet executor key.
+  const mainnetKey = env.ARC_MAINNET_EXECUTOR_PRIVATE_KEY?.trim();
+  const testnetKey = env.ARC_EXECUTOR_PRIVATE_KEY?.trim();
+  if (mainnetKey) {
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const norm = (key: string) => (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
+    const mainnetAccount = privateKeyToAccount(norm(mainnetKey));
+    check(
+      !testnetKey || norm(testnetKey) !== norm(mainnetKey),
+      "the Arc mainnet executor key is the same as the testnet executor key",
+    );
+    const signerKey = env.AGENT_SIGNER_PRIVATE_KEY?.trim();
+    if (signerKey) {
+      check(
+        privateKeyToAccount(norm(signerKey)).address.toLowerCase() !== mainnetAccount.address.toLowerCase(),
+        "the Arc mainnet executor is the platform signer",
+      );
+    }
+    const gas = await client.getBalance({ address: mainnetAccount.address });
+    check(gas > 0n, `Arc mainnet executor ${mainnetAccount.address} has no USDC for gas`);
+    console.log(`arc mainnet executor ${mainnetAccount.address} gas=${gas}`);
+  } else {
+    console.log(
+      "arc mainnet executor: NOT CONFIGURED — contracts are live and a vault can be deployed and\n" +
+      "  funded, but a mainnet payout will refuse to sign until ARC_MAINNET_EXECUTOR_PRIVATE_KEY is\n" +
+      "  set and funded with Arc USDC gas. This is reported, not treated as a pass.",
+    );
+  }
+
+  console.log(
+    `arc mainnet enabled: chain=${liveChainId} factory=${address} impl=${implementation} ` +
+    `tokenMessenger=${tokenMessenger}`,
+  );
 }
 
 const MODES: Record<string, () => void | Promise<void>> = {
@@ -321,7 +409,7 @@ const MODES: Record<string, () => void | Promise<void>> = {
   gateway: modeGateway,
   "setup-ui": modeSetupUi,
   "registry-binding": modeRegistryBinding,
-  "mainnet-off": modeMainnetOff,
+  "mainnet-on": modeMainnetOn,
 };
 
 const mode = process.argv[2];

@@ -69,9 +69,11 @@ test("an unsupported source chain is refused with the stage named", async () => 
   );
 });
 
-test("a chain without CCTP is refused rather than producing an unusable plan", async () => {
+test("a chain the registry does not know is refused rather than producing an unusable plan", async () => {
   await assert.rejects(
-    // X Layer Testnet has no CCTP deployment.
+    // 1952 is not in the registry at all. Every chain that *is* in the registry now carries CCTP,
+    // so an unknown id is the only way to reach this branch — which is the point: a funding plan
+    // must never be built for a chain whose CCTP wiring we cannot name.
     () => plan({ sourceChainId: 1952 }),
     (error: unknown) => error instanceof FundingUnsupportedError,
   );

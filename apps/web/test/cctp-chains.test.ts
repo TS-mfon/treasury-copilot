@@ -63,18 +63,58 @@ test("a testnet shares its mainnet CCTP domain, which is why the environment mus
 });
 
 test("CCTP_DOMAIN exposes the domains the project routes through", () => {
+  // Circle's published domain ids. Only forwarding-capable domains belong here, which is why 37
+  // (X Layer) is absent even though CCTP supports it.
   assert.deepEqual(
     { ...CCTP_DOMAIN },
-    { ethereum: 0, optimism: 2, arbitrum: 3, base: 6, polygon: 7, arc: 26, xLayer: 37 },
+    {
+      ethereum: 0, avalanche: 1, optimism: 2, arbitrum: 3, base: 6, polygon: 7,
+      unichain: 10, linea: 11, codex: 12, sonic: 13, worldchain: 14, monad: 15,
+      sei: 16, xdc: 18, hyperEvm: 19, ink: 21, plume: 22, arc: 26,
+    },
   );
+});
+
+test("no two registry chains claim the same CCTP domain in the same environment", () => {
+  // A domain identifies a chain within one Circle environment. Two registry entries sharing both
+  // would make a route ambiguous, and the one picked would be arbitrary.
+  const seen = new Map<string, string>();
+  for (const [key, chain] of Object.entries(SUPPORTED_CHAINS)) {
+    if (!chain.cctp) continue;
+    const slot = `${chain.cctp.attestationApiUrl}#${chain.cctp.domain}`;
+    const previous = seen.get(slot);
+    assert.equal(previous, undefined, `${key} and ${previous} share domain ${chain.cctp.domain}`);
+    seen.set(slot, key);
+  }
 });
 
 // --- settlement vs destination ------------------------------------------------------------------
 
-const DESTINATION_ONLY: SupportedChainKey[] = [
-  "ethereum", "ethereumSepolia", "optimism", "optimismSepolia", "arbitrum", "polygon", "polygonAmoy",
-];
-const SETTLEMENT: SupportedChainKey[] = ["baseSepolia", "base", "arbitrumSepolia", "arcTestnet", "arc"];
+// Derived, not hand-written. A hand-kept list silently stops covering chains added later, and
+// the point of these two tests is that the registry is exhaustively partitioned.
+const DESTINATION_ONLY = (Object.keys(SUPPORTED_CHAINS) as SupportedChainKey[])
+  .filter((key) => SUPPORTED_CHAINS[key].destinationOnly);
+const SETTLEMENT = (Object.keys(SUPPORTED_CHAINS) as SupportedChainKey[])
+  .filter((key) => !SUPPORTED_CHAINS[key].destinationOnly);
+
+test("every chain is either settleable or a payout destination, and never both", () => {
+  // The partition is the invariant the rest of the routing relies on: `settlementBackendForChainId`
+  // throws for destinations, so a chain in neither bucket would be unroutable and a chain in both
+  // would be contradictory.
+  assert.equal(
+    DESTINATION_ONLY.length + SETTLEMENT.length,
+    Object.keys(SUPPORTED_CHAINS).length,
+  );
+  assert.ok(SETTLEMENT.length > 0 && DESTINATION_ONLY.length > 0);
+  assert.equal(SETTLEMENT.filter((key) => DESTINATION_ONLY.includes(key)).length, 0);
+
+  // The five settlement chains are a deliberate, reviewed set, so name them: a new one appearing
+  // here without a backend and a funded executor would be a policy that cannot execute.
+  assert.deepEqual(
+    [...SETTLEMENT].sort(),
+    ["arbitrumSepolia", "arc", "arcTestnet", "base", "baseSepolia"],
+  );
+});
 
 test("a destination-only chain can receive CCTP but can never hold a treasury", () => {
   for (const key of DESTINATION_ONLY) {
@@ -112,8 +152,29 @@ test("every registry entry is reachable by chain id and has a unique id", () => 
   }
 });
 
-test("X Layer carries its CCTP domain now that Circle lists it", () => {
-  assert.equal(SUPPORTED_CHAINS.xLayer.cctp?.domain, 37);
-  // The X Layer testnet is not in Circle's published testnet list, so it stays closed.
-  assert.equal(SUPPORTED_CHAINS.xLayerTestnet.cctp, undefined);
+test("every CCTP destination in the registry is one Circle will forward to", () => {
+  // Our vault calls depositForBurnWithHook with the forwarding hook, so Circle performs the
+  // destination mint. A chain that CCTP supports but forwarding does not would burn on Arc and
+  // never credit the payee, because we hold no executor key or gas on the destination.
+  //
+  // This list is the Forwarding Service column of Circle's supported-domains table, confirmed
+  // against the live fee API by scripts/verify-cctp-candidates.mts. Domain 37 (X Layer) is
+  // deliberately absent: CCTP supports it, forwarding does not.
+  const forwardable = new Set([0, 1, 2, 3, 6, 7, 10, 11, 12, 13, 14, 15, 16, 18, 19, 21, 22, 26]);
+  for (const [key, chain] of Object.entries(SUPPORTED_CHAINS)) {
+    if (!chain.cctp) continue;
+    assert.ok(
+      forwardable.has(chain.cctp.domain),
+      `${key} has CCTP domain ${chain.cctp.domain}, which Circle will not forward to`,
+    );
+  }
+});
+
+test("X Layer is absent from the registry entirely", () => {
+  // It was removed rather than disabled. A disabled-but-present chain invites someone to switch
+  // it back on without rechecking whether forwarding exists.
+  const keys = Object.keys(SUPPORTED_CHAINS);
+  assert.ok(!keys.some((key) => key.toLowerCase().includes("xlayer")), `found ${keys}`);
+  assert.equal(chainById(196), undefined);
+  assert.equal(chainById(1952), undefined);
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useAccount, useConnect, useSignTypedData } from "wagmi";
 import { CheckCircle2, Clipboard, Fuel, KeyRound, LoaderCircle, ShieldCheck, WalletCards } from "lucide-react";
 import { isAddress, zeroAddress, type Address } from "viem";
@@ -20,7 +21,11 @@ import { VaultFunding } from "@/components/VaultFunding";
 import { canonicalJson, hashSetupActionPayload } from "@/lib/ownerActions";
 import { SetupProgressModal } from "@/components/SetupProgressModal";
 
-type DelegationChainKey = Extract<SupportedChainKey, "baseSepolia" | "base" | "arcTestnet">;
+/** Any chain a policy can be bound to. Destination-only chains hold no treasury. */
+type DelegationChainKey = Extract<
+  SupportedChainKey,
+  "baseSepolia" | "base" | "arbitrumSepolia" | "arcTestnet" | "arc"
+>;
 
 type SetupResult = {
   policy: Address;
@@ -29,24 +34,56 @@ type SetupResult = {
   api_key_expires_at: number;
 };
 
+/**
+ * Settlement chains offered in setup, derived from the registry rather than written down.
+ *
+ * This was a literal list carrying a hand-maintained `executionAvailable` flag, and it went stale
+ * in both directions: Base Mainnet stayed marked unavailable after its relayer was confirmed, and
+ * Arc Mainnet never appeared at all despite being deployed and allowlisted. Availability is now
+ * read off the chain config, so enabling a chain is one registry edit.
+ *
+ * Arc settles through a vault the owner deploys, not an ERC-7715 delegation, because Arc has
+ * neither the MetaMask Delegation Framework nor 1Shot support — so for Arc "available" means a
+ * vault factory is configured, and for the delegated chains it means a relayer actually answers
+ * for them. Arbitrum Sepolia is the useful negative case: it is a settlement chain in the
+ * registry but no relayer serves it, so it is listed and plainly marked unavailable instead of
+ * being silently absent.
+ */
 const delegationChains: Array<{
   key: DelegationChainKey;
   executionAvailable: boolean;
-}> = [
-  { key: "baseSepolia", executionAvailable: true },
-  // Arc settles through a vault the owner deploys, not an ERC-7715 delegation, because Arc has
-  // neither the MetaMask Delegation Framework nor 1Shot support.
-  { key: "arcTestnet", executionAvailable: true },
-  { key: "base", executionAvailable: false },
-];
+}> = (Object.keys(SUPPORTED_CHAINS) as SupportedChainKey[])
+  .filter((key): key is DelegationChainKey => !SUPPORTED_CHAINS[key].destinationOnly)
+  .map((key) => {
+    const chain = SUPPORTED_CHAINS[key];
+    return {
+      key,
+      executionAvailable: chain.executionBackend === "arc-vault"
+        ? Boolean(chain.vaultFactory)
+        : Boolean(chain.relayerUrl),
+    };
+  });
 
+/**
+ * The address the owner names on their vault or delegation.
+ *
+ * Each entry is written out literally because Next.js only inlines `process.env.NEXT_PUBLIC_X`
+ * into the browser bundle when it appears as a literal; a computed lookup would be undefined at
+ * runtime. The Arc chains deliberately read different variables — the mainnet executor is a
+ * separate, separately funded key, and must not be the testnet one.
+ */
 function operatorForChain(chainKey: DelegationChainKey) {
   if (chainKey === "arcTestnet") {
     return process.env.NEXT_PUBLIC_ARC_TESTNET_EXECUTOR_ADDRESS as Address | undefined;
   }
+  if (chainKey === "arc") {
+    return process.env.NEXT_PUBLIC_ARC_EXECUTOR_ADDRESS as Address | undefined;
+  }
   if (chainKey === "base") {
     return process.env.NEXT_PUBLIC_BASE_TREASURY_OPERATOR_ADDRESS as Address | undefined;
   }
+  // Base Sepolia, and anything else that settles by delegation, falls back to the shared
+  // platform operator.
   return (
     process.env.NEXT_PUBLIC_BASE_SEPOLIA_TREASURY_OPERATOR_ADDRESS
     ?? process.env.NEXT_PUBLIC_TREASURY_OPERATOR_ADDRESS
@@ -68,6 +105,9 @@ export default function SetupPage() {
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
   const [status, setStatus] = useState("");
   const [apiKey, setApiKey] = useState("");
+  // Reported by VaultFunding. Needed because "fund your vault" should only be pushed at someone
+  // whose vault is actually empty, and a failed balance read must not be treated as empty.
+  const [vaultBalance, setVaultBalance] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [setupError, setSetupError] = useState("");
   const [isDelegating, setIsDelegating] = useState(false);
@@ -445,7 +485,8 @@ export default function SetupPage() {
                 <p className="mt-2 break-all text-neutral-300">{vault}</p>
                 <p className="mt-2 text-neutral-300">
                   A new vault is empty. Fund it now so your agent can actually pay, then register it
-                  below. You can always top it up again later.
+                  below. You can always top it up again later from{" "}
+                  <Link href="/top-up" className="text-purple underline">Top up</Link>.
                 </p>
               </div>
               <div className="mt-4">
@@ -453,6 +494,11 @@ export default function SetupPage() {
                   chainKey={chainKey}
                   vault={vault}
                   label={agentName.trim() || undefined}
+                  onBalance={setVaultBalance}
+                  // Issuing the key is the moment setup feels finished, so that is when an empty
+                  // vault has to become impossible to miss: deploying a vault is not funding it,
+                  // and the first request against an empty one is refused with 402 vault_unfunded.
+                  highlight={Boolean(apiKey) && vaultBalance === "0"}
                 />
               </div>
             </>

@@ -78,9 +78,10 @@ export default function DocsPage() {
           <h2 className="text-xl font-semibold">Quickstart</h2>
           <ol className="mt-4 grid gap-3 text-sm text-neutral-300">
             <li><span className="font-mono text-purple">1.</span> Store the one-time API key in a secret manager or environment variable.</li>
-            <li><span className="font-mono text-purple">2.</span> Call <span className="font-mono">GET /policy</span>. Choose a recipient from <span className="font-mono">whitelisted_recipients</span>, or obtain an invoice recipient that the owner policy explicitly permits.</li>
-            <li><span className="font-mono text-purple">3.</span> Submit a decimal string amount with a stable idempotency key.</li>
-            <li><span className="font-mono text-purple">4.</span> Save the request ID and poll the request endpoint after timeouts.</li>
+            <li><span className="font-mono text-purple">2.</span> Call <span className="font-mono">GET /balance</span>. Check <span className="font-mono">ready_to_spend</span> and read <span className="font-mono">blockers</span>. This is the source of truth for your budget: it returns <span className="font-mono">weekly_cap</span>, <span className="font-mono">weekly_available</span> and <span className="font-mono">per_tx_cap</span>. An amount exactly equal to the per-transaction cap is allowed.</li>
+            <li><span className="font-mono text-purple">3.</span> Obtain your recipient <span className="font-semibold">from the owner, out of band</span>. Agent keys cannot list the approved recipients, deliberately: an agent that could enumerate them could also probe the policy. If you do not know your approved recipient, submit and read <span className="font-mono">denial_code</span> — <span className="font-mono">recipient_not_approved</span> means you need the owner to whitelist it.</li>
+            <li><span className="font-mono text-purple">4.</span> Submit a decimal string amount, a stable idempotency key, and evidence.</li>
+            <li><span className="font-mono text-purple">5.</span> <span className="font-semibold">202 is not approval.</span> It means queued. Keep polling <span className="font-mono">poll_url</span> until the request reaches a terminal state: <span className="font-mono">executed</span> or <span className="font-mono">denied</span>. A naive integration that treats 202 as success will report payments that never happened.</li>
           </ol>
           <p className="mt-4 text-sm text-neutral-400">
             The key identifies the agent but never signs a blockchain transaction. Every GenLayer write is signed by the server platform wallet after the key, registry, policy, funding account, chain, token, and execution reporter are verified.
@@ -105,8 +106,29 @@ export default function DocsPage() {
   "justification": "Monthly API renewal invoice #4471",
   "idempotency_key": "billing-4471-2026-07",
   "destination_chain": 84532,
-  "evidence": []
+  "evidence": [
+    {
+      "type": "invoice_url",
+      "invoice_id": "inv-4471",
+      "merchant_id": "example-observability",
+      "expected_recipient": "0xRecipient",
+      "expected_amount": "25000000",
+      "issued_at": 1791441323,
+      "uri": "https://billing.example.com/invoices/4471",
+      "merchant_domain": "billing.example.com",
+      "sha256": "0xTHE_SHA256_OF_THE_BYTES_THAT_URL_SERVES"
+    }
+  ]
 }`}</pre>
+          <p className="mt-3 text-sm text-warning">
+            Evidence is required: 1 to 3 items. An empty array is rejected with{" "}
+            <span className="font-mono">422 invalid_evidence</span>. An <span className="font-mono">invoice_url</span>{" "}
+            must be HTTPS, must return HTTP 200, and must serve an accepted content type —
+            <span className="font-mono">application/json</span> and <span className="font-mono">application/pdf</span>{" "}
+            work; an <span className="font-mono">image/*</span> response does not. The{" "}
+            <span className="font-mono">sha256</span> must be the digest of the bytes the URL actually serves,
+            so it changes whenever the document does.
+          </p>
           <p className="mt-3 text-sm text-neutral-400">
             <span className="font-mono">destination_chain</span> is optional. Omit it to settle on your
             treasury&apos;s own chain. Supply any chain Circle supports and the payment is bridged there over
@@ -272,6 +294,10 @@ export default function DocsPage() {
           <h3 className="mt-6 text-sm font-semibold text-neutral-300">Recover by idempotency key</h3>
           <pre className="terminal mt-2 overflow-auto p-4 text-xs">{recoveryExample}</pre>
           <p className="mt-4 text-sm text-neutral-400">
+            Addresses are compared case-insensitively, so EIP-55 checksummed and all-lowercase
+            forms are equivalent.
+          </p>
+          <p className="mt-3 text-sm text-neutral-400">
             GET /api/v1/policy returns only what an agent needs to form a valid request: where it
             settles, which token and precision to use, and whether its settlement binding is
             registered. Caps, remaining weekly budget, policy text and the recipient whitelist are

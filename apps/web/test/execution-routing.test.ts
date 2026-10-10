@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SUPPORTED_CHAINS, CCTP_DOMAIN, chainById } from "@treasury-copilot/shared";
+import {
+  SUPPORTED_CHAINS,
+  CCTP_DOMAIN,
+  chainById,
+  ONE_SHOT_RELAYER_MAINNET,
+  ONE_SHOT_RELAYER_TESTNET,
+} from "@treasury-copilot/shared";
 import {
   arcSettlementEnabled,
   assertSettlementAvailable,
@@ -109,11 +115,51 @@ test("CCTP domains are distinct per chain and shared contracts match across chai
   );
 });
 
-test("X Layer mainnet carries CCTP, its testnet does not", () => {
-  // Circle publishes X Layer at domain 37, so the mainnet route is open. No X Layer entry appears
-  // in Circle's testnet tables, so that one stays closed and must report no CCTP config.
-  assert.equal(SUPPORTED_CHAINS.xLayer.cctp?.domain, 37);
-  assert.equal(SUPPORTED_CHAINS.xLayerTestnet.cctp, undefined);
+test("Arc mainnet settles through the vault, not the delegation relayer", () => {
+  // Arc has neither the MetaMask Delegation Framework nor a 1Shot capability entry, on testnet or
+  // mainnet. Enabling mainnet must not quietly route it into the 7710 path.
+  assert.equal(SUPPORTED_CHAINS.arc.executionBackend, "arc-vault");
+  assert.equal(SUPPORTED_CHAINS.arc.relayerUrl, undefined);
+  assert.equal(SUPPORTED_CHAINS.arcTestnet.relayerUrl, undefined);
+});
+
+test("each delegated chain names the relayer that actually serves it", () => {
+  // 1Shot runs two relayers split by environment: production answers for mainnets and returns {}
+  // for Base Sepolia, dev answers for Base Sepolia and {} for every mainnet. A single global
+  // relayer URL therefore cannot serve both Base Sepolia and Base Mainnet.
+  assert.equal(SUPPORTED_CHAINS.base.relayerUrl, ONE_SHOT_RELAYER_MAINNET);
+  assert.equal(SUPPORTED_CHAINS.baseSepolia.relayerUrl, ONE_SHOT_RELAYER_TESTNET);
+  assert.notEqual(SUPPORTED_CHAINS.base.relayerUrl, SUPPORTED_CHAINS.baseSepolia.relayerUrl);
+
+  // Arbitrum Sepolia is served by neither relayer, so it has no URL. Pointing it at one would
+  // claim support that does not exist.
+  assert.equal(SUPPORTED_CHAINS.arbitrumSepolia.relayerUrl, undefined);
+});
+
+test("the registry relayer wins over the global override, per chain", async () => {
+  const { __resolveRelayerUrl } = await import("../src/lib/oneShot7710");
+
+  // The override was set to the dev relayer in production. If it won, every Base Mainnet payout
+  // would be sent to a relayer that returns {} for 8453 and fail as "unsupported on this
+  // network" — a single global value cannot be right for something that differs per chain.
+  withEnv({ ONE_SHOT_RELAYER_URL: ONE_SHOT_RELAYER_TESTNET }, () => {
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+    assert.equal(__resolveRelayerUrl("84532"), ONE_SHOT_RELAYER_TESTNET);
+  });
+
+  // The override still covers chains the registry does not name, which is the case an operator
+  // pointing at their own relayer actually needs.
+  withEnv({ ONE_SHOT_RELAYER_URL: "https://relayer.example.test/relayers" }, () => {
+    assert.equal(__resolveRelayerUrl("421614"), "https://relayer.example.test/relayers");
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+  });
+
+  // With nothing set, a named chain still resolves and an unknown one falls back rather than
+  // throwing, so a misconfiguration surfaces at the capability check with a clear message.
+  withEnv({ ONE_SHOT_RELAYER_URL: undefined, NEXT_PUBLIC_ONE_SHOT_RELAYER_URL: undefined }, () => {
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+    assert.equal(__resolveRelayerUrl("999999"), ONE_SHOT_RELAYER_TESTNET);
+  });
 });
 
 test("the Arc executor key is validated and must differ from the platform signer", async () => {
@@ -122,7 +168,7 @@ test("the Arc executor key is validated and must differ from the platform signer
   const keyB = `0x${"22".repeat(32)}`;
 
   withEnv({ ARC_EXECUTOR_PRIVATE_KEY: undefined }, () => {
-    assert.throws(() => arcExecutorAccount(), /Arc executor is not configured/);
+    assert.throws(() => arcExecutorAccount(), /set ARC_EXECUTOR_PRIVATE_KEY/);
   });
   withEnv({ ARC_EXECUTOR_PRIVATE_KEY: "0xdeadbeef" }, () => {
     assert.throws(() => arcExecutorAccount(), /exactly 32 bytes of hex/);
@@ -133,5 +179,50 @@ test("the Arc executor key is validated and must differ from the platform signer
   });
   withEnv({ ARC_EXECUTOR_PRIVATE_KEY: keyA, AGENT_SIGNER_PRIVATE_KEY: keyB }, () => {
     assert.doesNotThrow(() => arcExecutorAccount());
+  });
+});
+
+test("Arc mainnet never falls back to the testnet executor key", async () => {
+  const { arcExecutorAccount, ARC_MAINNET_CHAIN_ID, ARC_TESTNET_CHAIN_ID } =
+    await import("../src/lib/arcVault");
+  const testnetKey = `0x${"11".repeat(32)}`;
+  const mainnetKey = `0x${"33".repeat(32)}`;
+  const signer = `0x${"22".repeat(32)}`;
+
+  // The whole point: a deployment already configured for testnet must not start signing
+  // real-USDC mainnet payouts with that key just because mainnet got switched on.
+  withEnv({
+    ARC_EXECUTOR_PRIVATE_KEY: testnetKey,
+    ARC_MAINNET_EXECUTOR_PRIVATE_KEY: undefined,
+    AGENT_SIGNER_PRIVATE_KEY: signer,
+  }, () => {
+    assert.throws(
+      () => arcExecutorAccount(ARC_MAINNET_CHAIN_ID),
+      /set ARC_MAINNET_EXECUTOR_PRIVATE_KEY/,
+    );
+    // Testnet still works, so the stricter mainnet rule does not break the existing path.
+    assert.doesNotThrow(() => arcExecutorAccount(ARC_TESTNET_CHAIN_ID));
+  });
+
+  // Each chain uses its own key, and they resolve to different addresses.
+  withEnv({
+    ARC_EXECUTOR_PRIVATE_KEY: testnetKey,
+    ARC_MAINNET_EXECUTOR_PRIVATE_KEY: mainnetKey,
+    AGENT_SIGNER_PRIVATE_KEY: signer,
+  }, () => {
+    const testnet = arcExecutorAccount(ARC_TESTNET_CHAIN_ID);
+    const mainnet = arcExecutorAccount(ARC_MAINNET_CHAIN_ID);
+    assert.notEqual(testnet.address, mainnet.address);
+  });
+
+  // Signer separation still applies on mainnet.
+  withEnv({
+    ARC_MAINNET_EXECUTOR_PRIVATE_KEY: signer,
+    AGENT_SIGNER_PRIVATE_KEY: signer,
+  }, () => {
+    assert.throws(
+      () => arcExecutorAccount(ARC_MAINNET_CHAIN_ID),
+      /must differ from the platform signer/,
+    );
   });
 });

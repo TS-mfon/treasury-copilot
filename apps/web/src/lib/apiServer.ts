@@ -166,8 +166,16 @@ export function parseSpendPayload(value: unknown): SpendPayload {
   const evidence = body.evidence;
   const destination = body.destination_chain ?? body.destination_chain_id ?? body.destinationChainId;
 
-  if (typeof agent !== "string" || !isAddress(agent)) throw new Error("agent_address is required and must be a valid address");
-  if (typeof recipient !== "string" || !isAddress(recipient)) throw new Error("Invalid recipient");
+  // isAddress is checksum-strict by default, so an address whose casing differs from EIP-55 was
+  // rejected with a message claiming it was absent or malformed -- including the agent's own
+  // address as encoded in its API key. Addresses are compared case-insensitively everywhere else,
+  // so they are validated structurally here and the mismatch message names the real cause.
+  if (typeof agent !== "string" || !isAddress(agent, { strict: false })) {
+    throw new Error("agent_address is required and must be a 20-byte hex address");
+  }
+  if (typeof recipient !== "string" || !isAddress(recipient, { strict: false })) {
+    throw new Error("Invalid recipient: must be a 20-byte hex address");
+  }
   if (typeof amount !== "string" || amount.trim() === "") throw new Error("Invalid amount");
   if (typeof category !== "string" || category.trim().length < 2 || category.trim().length > 64) throw new Error("Category must be 2-64 characters");
   if (typeof justification !== "string" || justification.trim().length < 4 || justification.trim().length > 1200) throw new Error("Justification must be 4-1200 characters");
@@ -588,6 +596,26 @@ export async function executeApprovedPolicyRequest(policyAddress: Address, reque
   return { requestId, policy, requestState: await readPolicyRequest(policyAddress, requestId), execution, record };
 }
 
+/**
+ * Machine-readable denial cause, derived from the reason the policy stored on chain.
+ *
+ * The deterministic guards already record a precise sentence, so the code is read from that rather
+ * than requiring a contract change. A denial from the comparative review has no finer cause
+ * available: that path compares only the approved boolean so validators can agree, which is why a
+ * free-form reason cannot be trusted from it.
+ */
+export function denialCodeFor(row: Pick<RequestState, "verdict" | "reasoning">): string | null {
+  if (row.verdict !== "denied") return null;
+  const reason = String(row.reasoning ?? "").toLowerCase();
+  if (reason.includes("not on whitelist")) return "recipient_not_approved";
+  if (reason.includes("per-transaction cap")) return "amount_above_cap";
+  if (reason.includes("weekly cap")) return "weekly_cap_exhausted";
+  if (reason.includes("destination chain")) return "destination_not_permitted";
+  if (reason.includes("already used by another request")) return "evidence_required";
+  if (reason.includes("greater than zero")) return "amount_above_cap";
+  return "policy_text_rejected";
+}
+
 export function requestToApi(row: RequestState, decimals: number, chainId?: number) {
   const executionStatus = row.execution_status ?? (row.tx_hash ? "executed" : row.verdict === "approved" ? "approved_pending_execution" : "not_executed");
   const status = row.tx_hash
@@ -620,6 +648,7 @@ export function requestToApi(row: RequestState, decimals: number, chainId?: numb
     evidence_digest: row.evidence_digest ?? "",
     invoice_key: row.invoice_key ?? "",
     verdict: row.verdict,
+    denial_code: denialCodeFor(row),
     decision_mode: decisionMode,
     status,
     reasoning: row.reasoning,

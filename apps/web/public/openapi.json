@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Treasury Copilot Agent API",
-    "version": "1.4.0",
+    "version": "1.6.0",
     "description": "HTTP API for policy-gated agent spending. Current automatic execution uses Base Sepolia test USDC. POST /spend is asynchronous and returns 202 after GenLayer submission.\n\nSettlement depends on the chain a treasury is bound to. Base Sepolia settles through an ERC-7715 permission relayed by 1Shot. Arc Testnet settles through an agent treasury vault the owner deploys and owns, because Arc has neither the MetaMask Delegation Framework nor 1Shot support. A request may name any chain Circle CCTP supports as its destination; the policy reviews and stores that destination on chain, so a relayer cannot redirect an approved payment."
   },
   "servers": [
@@ -59,6 +59,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "An identical idempotent request already exists and is finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendAccepted"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Submitted to GenLayer; poll the Location URL",
             "headers": {
@@ -74,16 +84,6 @@
                 }
               }
             },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SpendAccepted"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "An identical idempotent request already exists and is finalized",
             "content": {
               "application/json": {
                 "schema": {
@@ -147,9 +147,6 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "422": {
-            "$ref": "#/components/responses/Unprocessable"
-          },
           "404": {
             "description": "GenLayer holds no request for this idempotency key: the submission was never accepted, or it was rejected before reaching the policy. retryable is false because polling this endpoint cannot make a record appear. Re-send the original POST once with the same key; that is idempotent and will not double-pay. The returned derived_request_id is computed from the key, not read from chain, and must not be treated as a payment id.",
             "content": {
@@ -159,6 +156,9 @@
                 }
               }
             }
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
           }
         }
       }
@@ -411,7 +411,9 @@
                   "$ref": "#/components/schemas/SignedInvoiceEvidence"
                 }
               ]
-            }
+            },
+            "minItems": 1,
+            "description": "Required, 1-3 items. An empty array is rejected with 422 invalid_evidence. An `invoice_url` item must be HTTPS, must return HTTP 200, and must serve an allow-listed content type (application/json and application/pdf are accepted; image/* is not). The `sha256` must be the digest of the bytes actually served."
           },
           "destination_chain": {
             "oneOf": [
@@ -608,7 +610,8 @@
               "failed",
               "executed",
               "not_applicable"
-            ]
+            ],
+            "description": "Raw lifecycle value. Reported to humans as: submitted/reviewing/review_pending -> Under review; ready/approved -> Approved; executing -> Paying; bridging -> Bridging to destination; executed -> Accepted / Executed; denied and not_applicable -> Denied (the policy stores not_applicable when a denial means execution never applied, so it means denied, not unknown); failed -> Failed, will retry."
           },
           "reasoning": {
             "type": "string"
@@ -625,7 +628,7 @@
               "executed",
               "not_applicable"
             ],
-            "description": "bridging means the payment was burned on the settlement chain and is awaiting Circle's mint on the destination. It reaches executed only once that mint is confirmed."
+            "description": "Raw lifecycle value. Reported to humans as: submitted/reviewing/review_pending -> Under review; ready/approved -> Approved; executing -> Paying; bridging -> Bridging to destination; executed -> Accepted / Executed; denied and not_applicable -> Denied (the policy stores not_applicable when a denial means execution never applied, so it means denied, not unknown); failed -> Failed, will retry."
           },
           "execution_error": {
             "type": "string"
@@ -665,6 +668,17 @@
           },
           "bridge": {
             "$ref": "#/components/schemas/BridgeState"
+          },
+          "denial_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenialReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set only when verdict is denied. A denied request is terminal: it will never change, so stop polling it."
           }
         }
       },
@@ -789,10 +803,12 @@
       },
       "ChainId": {
         "type": "integer",
-        "description": "EVM chain id. Payable testnet chains are 11155111 (Ethereum Sepolia), 11155420 (OP Sepolia), 421614 (Arbitrum Sepolia), 84532 (Base Sepolia), 80002 (Polygon Amoy) and 5042002 (Arc Testnet). A chain id is not a CCTP domain: a testnet shares its mainnet domain, so the two must not be confused.",
+        "description": "EVM chain id naming where an approved payment is delivered. Payable testnet chains are 1301 (Unichain Sepolia), 1328 (Sei Testnet), 4801 (World Chain Sepolia), 10143 (Monad Testnet), 43113 (Avalanche Fuji), 59141 (Linea Sepolia), 80002 (Polygon Amoy), 84532 (Base Sepolia), 421614 (Arbitrum Sepolia), 763373 (Ink Sepolia), 812242 (Codex Testnet), 5042002 (Arc Testnet), 11155111 (Ethereum Sepolia), 11155420 (OP Sepolia). Payable mainnet chains are 1 (Ethereum), 10 (OP Mainnet), 50 (XDC), 130 (Unichain), 137 (Polygon PoS), 143 (Monad), 146 (Sonic), 480 (World Chain), 999 (HyperEVM), 1329 (Sei), 5042 (Arc), 8453 (Base Mainnet), 42161 (Arbitrum One), 43114 (Avalanche), 57073 (Ink), 59144 (Linea), 81224 (Codex), 98866 (Plume). A route must stay within one Circle environment: a testnet policy cannot pay to a mainnet chain or the reverse, because the sandbox and production attestation services never see each other's messages. A chain id is not a CCTP domain — a testnet shares its mainnet domain, so the two must not be confused. X Layer (196) is not payable: Circle supports CCTP there but not the Forwarding Service this platform relies on for the destination mint.",
         "examples": [
           84532,
-          5042002
+          5042002,
+          8453,
+          5042
         ]
       },
       "ChainRef": {
@@ -856,7 +872,7 @@
       "PolicyState": {
         "type": "object",
         "additionalProperties": false,
-        "description": "What an agent key may learn about its own policy. Caps, remaining weekly budget, policy text and the recipient whitelist are deliberately withheld: an agent that can read them can size a request to sit just under a cap, mirror the policy's wording back as justification, and enumerate approved payees. A denial always states its reason, so the agent still learns why a request was refused without being handed the thresholds to design around. Owners see the full state through the owner endpoints.",
+        "description": "What an agent key may learn about its own policy. Policy text and the recipient whitelist are withheld, because an agent that reads them can mirror the owner's wording back as justification and enumerate approved payees. Budget figures are NOT withheld: /balance is the source of truth for weekly_cap, weekly_spent, weekly_available, per_tx_cap and cap_boundary. An amount exactly equal to per_tx_cap is allowed.",
         "required": [
           "contract_version",
           "settlement_backend",
@@ -937,6 +953,17 @@
             "description": "True when only the owner can clear this, such as funding a vault. False when it clears on its own, such as a weekly cap that resets."
           }
         }
+      },
+      "DenialReason": {
+        "enum": [
+          "recipient_not_approved",
+          "evidence_required",
+          "amount_above_cap",
+          "weekly_cap_exhausted",
+          "destination_not_permitted",
+          "policy_text_rejected"
+        ],
+        "description": "Why a request was denied. Present on a denied request so an agent can tell a missing whitelist entry from missing evidence without guessing."
       }
     },
     "responses": {

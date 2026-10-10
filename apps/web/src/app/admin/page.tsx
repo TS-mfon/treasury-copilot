@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, RefreshCw, ShieldCheck, XCircle, type LucideIcon } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, ExternalLink, RefreshCw, ShieldCheck, X, XCircle, type LucideIcon } from "lucide-react";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { Shell } from "@/components/Shell";
+import { statusLabel, statusToneClass } from "@/lib/statusLabels";
 
 type Overview = {
   configured: boolean;
@@ -28,6 +29,8 @@ export default function AdminPage() {
   const [requests, setRequests] = useState<PilotRequest[]>([]);
   const [events, setEvents] = useState<PilotEvent[]>([]);
   const [dependencies, setDependencies] = useState<Record<string, string>>({});
+  // The stream was read-only, so a request could be seen but never examined.
+  const [inspected, setInspected] = useState<PilotRequest | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -91,16 +94,22 @@ export default function AdminPage() {
         <section className="mt-6 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
           <div className="border border-outline bg-surface-low">
             <div className="flex items-center justify-between border-b border-outline p-4">
-              <div><p className="eyebrow purple-text">REQUEST STREAM</p><h2 className="mt-1 text-lg font-semibold">Recent testnet requests</h2></div>
+              <div><p className="eyebrow purple-text">REQUEST STREAM</p><h2 className="mt-1 text-lg font-semibold">Recent testnet requests</h2><p className="mt-1 text-xs text-neutral-500">Select a row to inspect it.</p></div>
               <span className="font-mono text-xs text-neutral-500">{number(overview?.active_agents)} agents</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[700px] text-left text-xs">
                 <thead className="border-b border-outline text-neutral-500"><tr><th className="p-3">Request</th><th className="p-3">State</th><th className="p-3">Amount</th><th className="p-3">Observed</th></tr></thead>
                 <tbody>
-                  {requests.map((row) => <tr className="border-b border-outline/70" key={row.request_id}>
+                  {requests.map((row) => <tr
+                    className={`cursor-pointer border-b border-outline/70 transition-colors hover:bg-purple/10 ${inspected?.request_id === row.request_id ? "bg-purple/10" : ""}`}
+                    key={row.request_id}
+                    tabIndex={0}
+                    onClick={() => setInspected(row)}
+                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setInspected(row); } }}
+                  >
                     <td className="p-3"><span className="block font-mono text-neutral-200">{row.request_id.slice(0, 14)}...</span><span className="mt-1 block text-neutral-500">{row.agent.slice(0, 12)}...</span></td>
-                    <td className="p-3"><span className={row.execution_status === "executed" ? "text-success" : row.verdict === "denied" || row.execution_status === "failed" ? "text-danger" : "text-signal"}>{row.execution_status}</span><span className="mt-1 block text-neutral-500">{row.reconciliation_status}</span></td>
+                    <td className="p-3"><span className={row.verdict === "denied" ? "text-danger" : statusToneClass(row.execution_status)}>{row.verdict === "denied" ? "Denied" : statusLabel(row.execution_status)}</span><span className="mt-1 block text-neutral-500">{row.reconciliation_status}</span></td>
                     <td className="p-3 font-mono">{row.amount} {row.token_symbol}</td>
                     <td className="p-3 text-neutral-500">{date(row.created_at)}</td>
                   </tr>)}
@@ -108,6 +117,63 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+            {inspected && (
+              <div className="mt-5 rounded-md border border-purple/40 bg-purple/5 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="eyebrow purple-text">INSPECTING</p>
+                    <p className="mt-1 break-all font-mono text-xs text-neutral-200">{inspected.request_id}</p>
+                  </div>
+                  <button
+                    className="rounded-md border border-outline p-1.5 text-neutral-400 hover:text-ink"
+                    onClick={() => setInspected(null)}
+                    aria-label="Close inspector"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <dl className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                  {([
+                    ["Outcome", inspected.verdict === "denied" ? "Denied" : statusLabel(inspected.execution_status)],
+                    ["Verdict", statusLabel(inspected.verdict)],
+                    ["Amount", `${inspected.amount} ${inspected.token_symbol}`],
+                    ["Agent", inspected.agent],
+                    ["Recipient", inspected.recipient],
+                    ["Reconciliation", inspected.reconciliation_status || "Not recorded"],
+                    ["Observed", date(inspected.created_at)],
+                  ] as Array<[string, string]>).map(([term, value]) => (
+                    <div key={term}>
+                      <dt className="text-[11px] uppercase text-neutral-500">{term}</dt>
+                      <dd className="mt-1 break-all font-mono text-xs text-neutral-200">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <div className="mt-4 border-t border-outline pt-4">
+                  <p className="text-[11px] uppercase text-neutral-500">Settlement transaction</p>
+                  {inspected.tx_hash
+                    ? <p className="mt-1 break-all font-mono text-xs text-neutral-200">{inspected.tx_hash}</p>
+                    : <p className="mt-1 text-xs text-neutral-500">
+                        No transaction. {inspected.verdict === "denied"
+                          ? "The request was denied, so nothing was ever sent on chain."
+                          : "Not settled yet."}
+                      </p>}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    className="inline-flex items-center gap-2 rounded-md border border-outline px-3 py-1.5 text-xs font-semibold text-neutral-200 hover:text-ink"
+                    onClick={() => void navigator.clipboard?.writeText(inspected.request_id)}
+                  >
+                    Copy request id
+                  </button>
+                  {events.some((event) => event.request_id === inspected.request_id) && (
+                    <span className="inline-flex items-center gap-2 text-xs text-neutral-400">
+                      <ExternalLink size={12} />
+                      {events.filter((event) => event.request_id === inspected.request_id).length} lifecycle event(s) below
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="border border-outline bg-surface-low">
