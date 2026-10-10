@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, CheckCircle2, Clipboard, Code2, ExternalLink, KeyRound, LoaderCircle, RefreshCw, Send, ShieldCheck, XCircle } from "lucide-react";
 import { Shell } from "@/components/Shell";
+import { statusLabel as label, statusToneClass as tone } from "@/lib/statusLabels";
 
 type RequestRecord = {
   request_id: string;
@@ -20,8 +21,7 @@ type RequestRecord = {
 };
 type Health = { status: string; environment: string; checked_at: string; checks: Record<string, string> };
 const lifecycle = ["submitted", "reviewing", "approved", "executing", "executed"];
-const label = (value: string) => value.replaceAll("_", " ");
-const tone = (value: string) => value === "executed" || value === "approved" ? "text-success" : value === "denied" || value === "failed" ? "text-danger" : "text-signal";
+
 const when = (value?: string) => { if (!value) return "Not available"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(); };
 
 export default function ConsolePage() {

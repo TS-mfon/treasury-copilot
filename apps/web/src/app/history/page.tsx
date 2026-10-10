@@ -5,6 +5,7 @@ import { ExternalLink, RefreshCw } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { friendlyError } from "@/lib/errors";
+import { statusLabel, statusToneClass } from "@/lib/statusLabels";
 
 interface HistoryRow {
   request_id: string;
@@ -24,11 +25,12 @@ interface HistoryRow {
 }
 
 function statusClass(row: HistoryRow) {
-  if (row.status === "executed") return "text-success";
-  if (row.verdict === "denied" || row.status === "failed") return "text-danger";
-  if (row.status === "executing" || row.status === "approved") return "text-signal";
-  return "text-neutral-300";
+  // A denied verdict wins over whatever execution_status says, since "not applicable" is only ever
+  // the consequence of the denial.
+  if (row.verdict === "denied") return "text-danger";
+  return statusToneClass(row.status);
 }
+
 
 function displayTime(value: string) {
   const date = new Date(value);
@@ -38,6 +40,7 @@ function displayTime(value: string) {
 export default function HistoryPage() {
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [error, setError] = useState("");
+  const [scanNote, setScanNote] = useState("");
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -48,6 +51,11 @@ export default function HistoryPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.message ?? data.error ?? "History failed");
       setRows(data.requests ?? []);
+      // An empty list must mean "no requests", so a partial scan is reported rather than hidden.
+      const failed = Array.isArray(data.failures) ? data.failures.length : 0;
+      setScanNote(failed > 0
+        ? `${failed} of ${data.scanned?.total ?? "?"} policies could not be read, so this list may be incomplete.`
+        : "");
     } catch (cause) {
       setError(friendlyError(cause));
     } finally {
@@ -74,6 +82,7 @@ export default function HistoryPage() {
         </div>
 
         {error && <p className="mt-5 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{error}</p>}
+          {scanNote && <p className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">{scanNote}</p>}
 
         <div className="mt-6 overflow-x-auto border border-outline">
           <table className="w-full min-w-[980px] border-collapse text-left text-sm">
@@ -90,7 +99,7 @@ export default function HistoryPage() {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.request_id} className="border-b border-outline bg-paper align-top last:border-b-0 hover:bg-surface-low">
-                  <td className="px-4 py-4"><span className={`badge ${statusClass(row)}`}>{row.status.replaceAll("_", " ")}</span></td>
+                  <td className="px-4 py-4"><span className={`badge ${statusClass(row)}`}>{row.verdict === "denied" ? "Denied" : statusLabel(row.status)}</span></td>
                   <td className="px-4 py-4 font-mono">{row.amount} {row.token_symbol}</td>
                   <td className="max-w-48 px-4 py-4 break-all font-mono text-xs text-neutral-300">{row.recipient}</td>
                   <td className="max-w-md px-4 py-4">

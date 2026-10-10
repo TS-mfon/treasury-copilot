@@ -266,6 +266,40 @@ an agent API key.
 You keep withdraw and pause authority on the vault. The executor can only pay out requests GenLayer
 has already approved, which you can confirm with the read-only reverts in Test 5.
 
+## Test 13: read a request's outcome
+
+Open `/history` to see every request across your policies. The status column reads in plain terms:
+**Accepted / Executed** means the payee was paid, **Denied** means the policy refused it and nothing
+moved, **Bridging to destination** means the burn happened and Circle has not yet minted. A denied
+row never shows a transaction, because nothing was ever sent on chain.
+
+Select a row in `/history` to expand its detail, including the recipient, the destination chain and
+the settlement transaction.
+
+When the outcome is **Denied**, `GET /api/v1/requests/:id` returns a machine-readable
+`denial_code`:
+
+| denial_code | What it means | Who fixes it |
+| --- | --- | --- |
+| `recipient_not_approved` | The payee is not on the policy's whitelist | Owner, in `/policy` |
+| `evidence_required` | The invoice or evidence was missing or already used | Agent |
+| `amount_above_cap` | Above the per-transaction cap, or zero | Agent |
+| `weekly_cap_exhausted` | The weekly budget is spent | Wait for the window to reset |
+| `destination_not_permitted` | That chain is not permitted for this policy | Owner |
+| `policy_text_rejected` | The comparative review judged it against your policy text | Owner rewrites the policy, or the agent improves the request |
+
+`policy_text_rejected` is the only one without a finer cause, because that review compares a single
+boolean so validators can agree — a free-form reason from it could not be trusted.
+
+## Test 14: the operator console
+
+`/admin` is not linked in the navigation; type the URL. It requires the owner session and the
+`ADMIN_WALLET_ALLOWLIST`. The request stream is clickable — select any row to inspect the recipient,
+destination chain, reconciliation state and settlement transaction, or to copy the request id.
+
+It is unlinked because it is an operator surface, not because it is secret. Access control is the
+session plus the allowlist, not the absence of a link.
+
 ## What does not work yet
 
 **Arc Mainnet is deliberately off.** It needs a separate registry, gateway key, reporter key,

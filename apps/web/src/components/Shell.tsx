@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, BookOpen, Bot, Coins, Gauge, History, Menu, Settings, ShieldCheck, TerminalSquare, X } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Coins, Gauge, History, Menu, Settings, ShieldCheck, TerminalSquare, X } from "lucide-react";
 import { OwnerAuthButton } from "@/components/OwnerAuthButton";
 import { SetupAccessLink } from "@/components/SetupAccessLink";
 import { useOwnerSession } from "@/components/OwnerSessionProvider";
@@ -16,9 +16,11 @@ const publicNav = [
   { href: "/docs", label: "Docs", icon: BookOpen },
 ];
 
+// /admin is intentionally absent: it is operator-only and reachable by typing the URL. Removing the
+// link keeps it out of the owner surface without pretending that is access control -- the route
+// still enforces requirePilotAdmin.
 const ownerNav = [
   { href: "/dashboard", label: "Dashboard", icon: Gauge },
-  { href: "/admin", label: "Pilot Ops", icon: Activity },
   { href: "/history", label: "History", icon: History },
   { href: "/policy", label: "Policy", icon: Settings },
   { href: "/top-up", label: "Top up", icon: Coins },

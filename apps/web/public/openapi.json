@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Treasury Copilot Agent API",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "HTTP API for policy-gated agent spending. Current automatic execution uses Base Sepolia test USDC. POST /spend is asynchronous and returns 202 after GenLayer submission.\n\nSettlement depends on the chain a treasury is bound to. Base Sepolia settles through an ERC-7715 permission relayed by 1Shot. Arc Testnet settles through an agent treasury vault the owner deploys and owns, because Arc has neither the MetaMask Delegation Framework nor 1Shot support. A request may name any chain Circle CCTP supports as its destination; the policy reviews and stores that destination on chain, so a relayer cannot redirect an approved payment."
   },
   "servers": [
@@ -411,7 +411,9 @@
                   "$ref": "#/components/schemas/SignedInvoiceEvidence"
                 }
               ]
-            }
+            },
+            "minItems": 1,
+            "description": "Required, 1-3 items. An empty array is rejected with 422 invalid_evidence. An `invoice_url` item must be HTTPS, must return HTTP 200, and must serve an allow-listed content type (application/json and application/pdf are accepted; image/* is not). The `sha256` must be the digest of the bytes actually served."
           },
           "destination_chain": {
             "oneOf": [
@@ -608,7 +610,8 @@
               "failed",
               "executed",
               "not_applicable"
-            ]
+            ],
+            "description": "Raw lifecycle value. Reported to humans as: submitted/reviewing/review_pending -> Under review; ready/approved -> Approved; executing -> Paying; bridging -> Bridging to destination; executed -> Accepted / Executed; denied and not_applicable -> Denied (the policy stores not_applicable when a denial means execution never applied, so it means denied, not unknown); failed -> Failed, will retry."
           },
           "reasoning": {
             "type": "string"
@@ -625,7 +628,7 @@
               "executed",
               "not_applicable"
             ],
-            "description": "bridging means the payment was burned on the settlement chain and is awaiting Circle's mint on the destination. It reaches executed only once that mint is confirmed."
+            "description": "Raw lifecycle value. Reported to humans as: submitted/reviewing/review_pending -> Under review; ready/approved -> Approved; executing -> Paying; bridging -> Bridging to destination; executed -> Accepted / Executed; denied and not_applicable -> Denied (the policy stores not_applicable when a denial means execution never applied, so it means denied, not unknown); failed -> Failed, will retry."
           },
           "execution_error": {
             "type": "string"
@@ -665,6 +668,17 @@
           },
           "bridge": {
             "$ref": "#/components/schemas/BridgeState"
+          },
+          "denial_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenialReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set only when verdict is denied. A denied request is terminal: it will never change, so stop polling it."
           }
         }
       },
@@ -856,7 +870,7 @@
       "PolicyState": {
         "type": "object",
         "additionalProperties": false,
-        "description": "What an agent key may learn about its own policy. Caps, remaining weekly budget, policy text and the recipient whitelist are deliberately withheld: an agent that can read them can size a request to sit just under a cap, mirror the policy's wording back as justification, and enumerate approved payees. A denial always states its reason, so the agent still learns why a request was refused without being handed the thresholds to design around. Owners see the full state through the owner endpoints.",
+        "description": "What an agent key may learn about its own policy. Policy text and the recipient whitelist are withheld, because an agent that reads them can mirror the owner's wording back as justification and enumerate approved payees. Budget figures are NOT withheld: /balance is the source of truth for weekly_cap, weekly_spent, weekly_available, per_tx_cap and cap_boundary. An amount exactly equal to per_tx_cap is allowed.",
         "required": [
           "contract_version",
           "settlement_backend",
@@ -937,6 +951,17 @@
             "description": "True when only the owner can clear this, such as funding a vault. False when it clears on its own, such as a weekly cap that resets."
           }
         }
+      },
+      "DenialReason": {
+        "enum": [
+          "recipient_not_approved",
+          "evidence_required",
+          "amount_above_cap",
+          "weekly_cap_exhausted",
+          "destination_not_permitted",
+          "policy_text_rejected"
+        ],
+        "description": "Why a request was denied. Present on a denied request so an agent can tell a missing whitelist entry from missing evidence without guessing."
       }
     },
     "responses": {
