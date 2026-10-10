@@ -213,9 +213,15 @@ Poll `/api/v1/requests/:id`. A cross-chain request moves through `route: "cctp"`
 the burn hash, then the attestation status, then the destination mint hash. The request is only
 `executed` once Circle has minted, because the burn alone is not the payee's receipt.
 
-Supported destinations and their CCTP domains are listed in [docs/arc.md](arc.md). Payable testnet
-chains are Arc Testnet (26), Base Sepolia (6), Arbitrum Sepolia (3), Ethereum Sepolia (0),
-OP Sepolia (2) and Polygon Amoy (7).
+Every payable destination, with its chain id and CCTP domain, is listed in
+[docs/arc.md](arc.md) and in the README under **Supported Networks**. Both tables are generated
+from the chain registry by `scripts/gen-network-tables.mjs`, so they cannot drift from the code;
+`node scripts/gen-network-tables.mjs --check` fails if they have.
+
+A route must stay inside one Circle environment. An Arc Testnet policy pays to testnets, an Arc
+Mainnet policy pays to mainnets, and a request that crosses the two is refused before anything is
+burned — the sandbox and production attestation services never see each other's messages, so such
+a transfer could never be attested.
 
 To drive the whole thing yourself without the agent API:
 

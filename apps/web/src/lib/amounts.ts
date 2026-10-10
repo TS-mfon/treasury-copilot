@@ -32,8 +32,7 @@ export function formatAmount(units: bigint | string | number, decimals: number):
   };
 }
 
-export function tokenDecimalsFor(chainId: number, symbol: "USDC" | "OKB"): number {
-  if (symbol === "OKB") return 18;
+export function tokenDecimalsFor(chainId: number, symbol: "USDC"): number {
   if (symbol === "USDC") return 6;
   throw new Error(`Unsupported token symbol ${symbol}`);
 }

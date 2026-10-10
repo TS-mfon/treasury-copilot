@@ -125,7 +125,7 @@ test("an unresolvable route fails with the stage named rather than throwing", as
   const { writes, writeImpl } = recorder();
   const outcome = await advanceBridgedRequest(
     policy,
-    // X Layer Testnet has no CCTP deployment, so no route exists.
+    // 1952 is not a registry chain, so no CCTP route can be resolved for it.
     bridging({ destination_chain_id: "1952" }),
     ARC_TESTNET,
     { writeImpl, fetchAttestationImpl: attestationOf(undefined) },

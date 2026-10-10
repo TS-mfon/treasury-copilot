@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Coins, LoaderCircle, Wallet } from "lucide-react";
 import { parseUnits, type Address } from "viem";
 import { SUPPORTED_CHAINS, type SupportedChainKey } from "@treasury-copilot/shared";
@@ -19,11 +19,21 @@ export function VaultFunding({
   vault,
   label,
   onFunded,
+  onBalance,
+  highlight = false,
 }: {
   chainKey: SupportedChainKey;
   vault: Address;
   label?: string;
   onFunded?: (hash: string) => void;
+  /** Reports the vault balance upward so the caller can tell funded from empty. */
+  onBalance?: (formatted: string | null) => void;
+  /**
+   * Draw the owner's attention here: scroll into view, focus the amount field, and pulse the
+   * border. Setup raises this once the API key exists, because that is the moment the owner
+   * thinks they are finished — and an unfunded vault means the agent's first request is refused.
+   */
+  highlight?: boolean;
 }) {
   const chain = SUPPORTED_CHAINS[chainKey];
   const decimals = chain.tokens.USDC?.decimals ?? 6;
@@ -35,16 +45,45 @@ export function VaultFunding({
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const [flash, setFlash] = useState(false);
+
   const refresh = useCallback(async () => {
     try {
-      setBalance((await readVaultBalance(chainKey, vault)).formatted);
+      const { formatted } = await readVaultBalance(chainKey, vault);
+      setBalance(formatted);
+      onBalance?.(formatted);
     } catch {
       // A read failure must not look like an empty vault, which would be a misleading zero.
       setBalance(null);
+      onBalance?.(null);
     }
-  }, [chainKey, vault]);
+  }, [chainKey, vault, onBalance]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Read through a ref so that starting a transaction does not re-run the effect below and yank
+  // focus out of the wallet confirmation.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+
+  // Only pull focus for a vault that is actually empty. Nagging someone who already funded it
+  // trains them to ignore the thing, and stealing focus mid-typing is its own bug.
+  useEffect(() => {
+    if (!highlight || balance !== "0" || busyRef.current) return;
+    containerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const focusTimer = setTimeout(() => {
+      amountRef.current?.focus();
+      amountRef.current?.select();
+    }, 350);
+    setFlash(true);
+    const flashTimer = setTimeout(() => setFlash(false), 2_600);
+    return () => {
+      clearTimeout(focusTimer);
+      clearTimeout(flashTimer);
+    };
+  }, [highlight, balance]);
 
   async function fund() {
     setError("");
@@ -69,7 +108,14 @@ export function VaultFunding({
   const empty = balance === "0";
 
   return (
-    <div className="rounded-md border border-outline bg-neutral-900/40 p-4">
+    <div
+      ref={containerRef}
+      className={`rounded-md border bg-neutral-900/40 p-4 transition-shadow ${
+        flash
+          ? "animate-pulse border-warning shadow-[0_0_0_3px_rgba(245,158,11,0.35)]"
+          : "border-outline"
+      }`}
+    >
       <div className="flex items-center gap-2">
         <Coins size={16} className="text-purple" />
         <h3 className="text-sm font-semibold">{label ? `Fund ${label}` : "Fund this vault"}</h3>
@@ -92,6 +138,7 @@ export function VaultFunding({
         <label className="grid gap-1 text-xs font-semibold uppercase text-neutral-500">
           Amount in USDC
           <input
+            ref={amountRef}
             className="field w-32"
             value={amount}
             inputMode="decimal"

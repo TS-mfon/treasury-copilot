@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { denialCodeFor, parseSpendPayload, requestToApi } from "../src/lib/apiServer";
-import { isTerminalStatus, statusLabel, statusTone } from "../src/lib/statusLabels";
+import { isTerminalStatus, missingTxLabel, statusLabel, statusTone } from "../src/lib/statusLabels";
 import type { RequestState } from "../src/lib/apiServer";
 import type { Address } from "viem";
 
@@ -111,6 +111,20 @@ test("terminal states are identified so a poller can stop", () => {
   assert.equal(isTerminalStatus("bridging"), false);
   assert.equal(isTerminalStatus("submitted"), false);
   assert.equal(isTerminalStatus(undefined), false);
+});
+
+test("a denied request's transaction cell reads Rejected, not Pending", () => {
+  // A denial has no hash and never will. "Pending" described it as waiting for a settlement that
+  // had already been refused, which is why a denied row looked like one still in flight.
+  assert.equal(missingTxLabel("not_applicable", "denied"), "Rejected");
+  assert.equal(missingTxLabel("denied", "denied"), "Rejected");
+  assert.equal(missingTxLabel("not_applicable", undefined), "Rejected");
+
+  // A request that genuinely has a hash coming still reads Pending.
+  assert.equal(missingTxLabel("submitted", "pending"), "Pending");
+  assert.equal(missingTxLabel("bridging", "approved"), "Pending");
+  assert.equal(missingTxLabel("executing", "approved"), "Pending");
+  assert.equal(missingTxLabel(undefined, undefined), "Pending");
 });
 
 test("the payee's receipt is the destination hash, not the burn", () => {

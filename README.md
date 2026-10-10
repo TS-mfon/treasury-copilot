@@ -48,6 +48,7 @@ instead of giving them the company's bank credentials.
 - [End-to-End Agent Request](#end-to-end-agent-request)
 - [Agent API Quickstart](#agent-api-quickstart)
 - [Trust and Security Model](#trust-and-security-model)
+- [Deployed Contracts](#deployed-contracts)
 - [Supported Networks](#supported-networks)
 - [Technology Stack](#technology-stack)
 - [Local Development](#local-development)
@@ -92,7 +93,17 @@ The production release currently supports:
 
 - GenLayer StudioNet for registry storage, policy deployment, request
   evaluation, finality, and execution history.
-- Base Sepolia for USDC payment execution.
+- Two settlement backends: MetaMask ERC-7715 delegation redelegated to the
+  1Shot relayer (Base Sepolia, Base Mainnet), and an owner-deployed
+  `AgentTreasury` vault paid by a dedicated platform executor (Arc, Arc
+  Testnet). Arc has neither the MetaMask Delegation Framework nor a 1Shot
+  capability entry, which is why it needs its own rail.
+- Cross-chain payouts over Circle CCTP v2 to every network listed under
+  [Supported Networks](#supported-networks). The agent names the destination per
+  request; the payee receives the full approved amount because the vault burns
+  principal plus Circle's fee.
+- Inbound CCTP funding, so an owner can top a vault up from any supported chain
+  without holding funds on the settlement chain.
 - MetaMask ERC-7715 periodic ERC-20 permissions.
 - 1Shot ERC-7710 execution after GenLayer finality.
 - One isolated policy, API-key version, and funding binding per agent.
@@ -106,18 +117,24 @@ The production release currently supports:
 - HTTPS invoice digest and EIP-712 signed-invoice evidence verification.
 - Idempotency-key recovery when a client times out before receiving a response.
 
-Base Mainnet is represented in the network configuration and setup UI, but
-automatic delegation remains disabled until the configured 1Shot relayer
-advertises a valid capability for chain `8453`.
+Base Mainnet delegation is enabled. It is served by 1Shot's **production**
+relayer, which advertises chain `8453`; Base Sepolia is served by the **dev**
+relayer. The two relayers do not overlap, so the relayer is resolved per chain
+rather than from one global setting — a single URL cannot serve both.
 
-X Layer mainnet (`196`), X Layer testnet (`1952`), USDC, and native OKB are
-represented in shared chain configuration. They are not exposed as executable
-production rails until live 1Shot capability checks confirm that the selected
-chain and asset can be redeemed safely.
+Arc Mainnet contracts are deployed and verified on chain (see
+[Deployed Contracts](#deployed-contracts)): an owner can deploy and fund a vault
+there today. Mainnet payout signing additionally requires
+`ARC_MAINNET_EXECUTOR_PRIVATE_KEY`, which deliberately does **not** fall back to
+the testnet executor key — real-USDC settlement must not be signed by a key
+provisioned and funded as a testnet key. Until that variable is set and funded
+with Arc USDC gas, a mainnet payout refuses to sign rather than using the wrong
+key.
 
-The repository also contains tested EVM treasury and factory contracts for a
-possible user-funded vault rail. That rail is not active in the current
-ERC-7715-only release.
+X Layer has been removed from the codebase and the chain registry. Circle's
+Forwarding Service does not support it, and the architecture depends on
+forwarding for the destination mint, so a payment routed there would burn on the
+source chain and never credit the payee.
 
 ## System Overview
 
@@ -471,19 +488,24 @@ payloads.
 
 Official reference: [1Shot API documentation](https://1shotapi.com/docs).
 
-### Base and USDC
+### Settlement Networks and USDC
 
-Base is the EVM execution network used by the current payment rail.
+Base (Sepolia and Mainnet) settles through ERC-7715 delegation. Arc (Testnet and
+Mainnet) settles through an owner-deployed vault. Both move USDC.
 
-The active release executes test payments on Base Sepolia with USDC. USDC uses
-six decimal places on the configured Base networks. Treasury Copilot treats
-amounts as decimal strings and converts them to integer token units.
+USDC uses six decimal places on every configured network. Treasury Copilot
+treats amounts as decimal strings and converts them to integer token units: `25.00
+USDC` becomes `25000000` atomic units. The application never uses JavaScript
+floating-point arithmetic for money.
 
-For example, `25.00 USDC` becomes `25000000` atomic units. The application
-never uses JavaScript floating-point arithmetic for money.
-
-Base Mainnet execution remains disabled until 1Shot advertises the required
-live capability.
+Arc is the one network where this needs care. Arc's gas asset is **native USDC
+at 18 decimals**, while the same balance read through the ERC-20 interface at
+`0x3600…0000` reports **6 decimals**. They are not two balances — they are one
+balance at two precisions, differing by exactly `1e12`, which was confirmed by
+reading both on chain. Treating them as separate pots is the mistake to avoid:
+an earlier "sweep the native balance" helper was removed for exactly that
+reason, since it could have desynchronised the vault's fee reserve from its real
+holdings.
 
 ### On-Chain History
 
@@ -524,19 +546,32 @@ from the public.
 Execution leases and request-ID replay protection prevent concurrent workers
 from creating duplicate payouts.
 
-### Optional EVM Treasury Contracts
+### EVM Treasury Contracts
 
-The repository contains:
+The active vault rail, used for every Arc settlement:
 
-- `contracts/evm/src/Treasury.sol`
-- `contracts/evm/src/TreasuryFactory.sol`
+- `contracts/evm/src/AgentTreasury.sol`
+- `contracts/evm/src/AgentTreasuryFactory.sol`
+- `contracts/evm/src/interfaces/ICCTP.sol`
 
-These contracts implement an owner-controlled treasury clone with relayer-only
-payouts, owner withdrawals, ERC-20 or native-asset support, and request-ID
-replay protection.
+`AgentTreasury` splits authority two ways. The **owner** is the human: they
+fund, withdraw and pause, and they keep those rights unconditionally — `pause`
+deliberately leaves `withdraw` open, so pausing can never strand an owner's own
+money. The **executor** is the platform, and it can do exactly one thing: pay
+out a request the policy has already approved.
 
-They are retained and tested as infrastructure for a possible user-funded vault
-rail. They are not used by the current production ERC-7715 execution path.
+`payout` and `payoutCrossChain` share a single `executed` mapping, so one
+approved request can never be both paid locally and bridged. `payoutCrossChain`
+burns principal **plus** `maxFee`, so Circle's fee deduction leaves the payee
+with the full approved amount, and the fee comes from a bounded `feeReserve`
+that payouts may not eat into. The implementation locks itself in its
+constructor, so only factory-made clones are usable.
+
+Deployed addresses are under [Deployed Contracts](#deployed-contracts).
+
+The earlier `Treasury.sol` and `TreasuryFactory.sol` remain in the repository as
+historical evidence of the Base/Arbitrum deployments. They are not in any
+current execution path.
 
 ## End-to-End Owner Setup
 
@@ -766,19 +801,133 @@ Never expose or commit:
 Rotate an API key immediately if it appears in chat, logs, screenshots, source
 control, or a public prompt.
 
+## Deployed Contracts
+
+<!-- BEGIN:deployed-contracts -->
+<!-- Generated by scripts/gen-network-tables.mjs — edit the chain registry, not this table. -->
+
+Contracts this project deploys and owns:
+
+| Network | Chain ID | Contract | Address |
+| --- | ---: | --- | --- |
+| Arc Testnet | `5042002` | AgentTreasury (implementation) | [`0x4eD45045c4e737287cA75d2d2980DE44a6915eeE`](https://explorer.testnet.arc.io/address/0x4eD45045c4e737287cA75d2d2980DE44a6915eeE) |
+| Arc Testnet | `5042002` | AgentTreasuryFactory | [`0xe47cE1C562C6355cD9Cf4cF6420Af2cD238456fB`](https://explorer.testnet.arc.io/address/0xe47cE1C562C6355cD9Cf4cF6420Af2cD238456fB) |
+| Arc | `5042` | AgentTreasury (implementation) | [`0x7aa28657547aAcBf6E83CA7eC3a3073214f600d7`](https://explorer.arc.io/address/0x7aa28657547aAcBf6E83CA7eC3a3073214f600d7) |
+| Arc | `5042` | AgentTreasuryFactory | [`0x450B2D9dad4C72B43620688ef9626F98540CA808`](https://explorer.arc.io/address/0x450B2D9dad4C72B43620688ef9626F98540CA808) |
+
+Each owner's treasury is a minimal-proxy clone deployed by the factory above, so its address is
+specific to that owner and is shown in the app after setup. The implementation is locked in its
+constructor and reverts `already initialized` if called directly, so only clones are usable.
+
+Protocol contracts called but not owned by this project. Circle deploys CCTP v2 at the same
+address on every supported chain, so these are constants rather than per-chain configuration:
+
+| Contract | Address |
+| --- | --- |
+| CCTP v2 TokenMessenger (mainnet) | `0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d` |
+| CCTP v2 MessageTransmitter (mainnet) | `0x81D40F21F12A8F0E3252Bccb954D722d4c464B64` |
+| CCTP v2 TokenMessenger (testnet) | `0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA` |
+| CCTP v2 MessageTransmitter (testnet) | `0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275` |
+| Arc USDC (ERC-20 interface, both Arc chains) | `0x3600000000000000000000000000000000000000` |
+
+<!-- END:deployed-contracts -->
+
 ## Supported Networks
 
-| Network | Chain ID | Assets in config | Current status |
-| --- | ---: | --- | --- |
-| Base Sepolia | `84532` | USDC | Active test execution rail |
-| Base Mainnet | `8453` | USDC | UI/config ready; execution capability-gated |
-| Arbitrum Sepolia | `421614` | USDC | Shared config only |
-| X Layer | `196` | USDC, native OKB | Hidden until live execution support is confirmed |
-| X Layer Testnet | `1952` | USDC, native OKB | Hidden until live execution support is confirmed |
-| GenLayer StudioNet | N/A | Policy and registry state | Active decision and audit layer |
+A treasury lives on a **settlement** network. An approved payment can be delivered to any
+**destination** network, which is how an agent asks to be paid wherever it wants without the owner
+holding funds there.
 
-Treasury Copilot does not create a delegation for a chain that cannot be
-redeemed through the configured execution infrastructure.
+### Settlement networks
+
+<!-- BEGIN:settlement-networks -->
+<!-- Generated by scripts/gen-network-tables.mjs — edit the chain registry, not this table. -->
+
+| Network | Chain ID | CCTP domain | How an approved payment settles |
+| --- | ---: | ---: | --- |
+| Arc | `5042` | 26 | Owner-deployed `AgentTreasury` vault, paid by the platform executor |
+| Base Mainnet | `8453` | 6 | ERC-7715 delegation redelegated to the 1Shot relayer |
+| Base Sepolia | `84532` | 6 | ERC-7715 delegation redelegated to the 1Shot relayer |
+| Arbitrum Sepolia | `421614` | 3 | ERC-7715 delegation redelegated to the 1Shot relayer |
+| Arc Testnet | `5042002` | 26 | Owner-deployed `AgentTreasury` vault, paid by the platform executor |
+
+<!-- END:settlement-networks -->
+
+GenLayer StudioNet is not in this table because no money moves there: it holds the policy, the
+registry and the decision history, and is the active decision and audit layer for every network
+above.
+
+Treasury Copilot does not create a delegation for a chain that cannot be redeemed through the
+configured execution infrastructure. Arbitrum Sepolia is the live example — it is in the shared
+config, but no 1Shot relayer answers for it in either environment, so a delegation there is
+refused at the capability check rather than created and left unusable.
+
+### CCTP payout destinations
+
+Every network an agent may name in `destination_chain`. The payee receives the full approved
+amount: the vault burns principal plus Circle's fee, and Circle's **Forwarding Service** performs
+the destination mint, so Treasury Copilot needs no key and no gas on the destination chain.
+
+A route's endpoints must share a Circle environment — a mainnet policy cannot pay to a testnet, and
+the reverse — because the sandbox and production attestation services never see each other's
+messages.
+
+<!-- BEGIN:cctp-destinations -->
+<!-- Generated by scripts/gen-network-tables.mjs — edit the chain registry, not this table. -->
+
+**Mainnet** — Circle's production attestation service (`iris-api.circle.com`).
+
+| Network | Chain ID | CCTP domain | Role | USDC |
+| --- | ---: | ---: | --- | --- |
+| Ethereum | `1` | 0 | Destination | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
+| Avalanche | `43114` | 1 | Destination | `0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E` |
+| OP Mainnet | `10` | 2 | Destination | `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85` |
+| Arbitrum One | `42161` | 3 | Destination | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| Base Mainnet | `8453` | 6 | Settlement + destination | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Polygon PoS | `137` | 7 | Destination | `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` |
+| Unichain | `130` | 10 | Destination | `0x078D782b760474a361dDA0AF3839290b0EF57AD6` |
+| Linea | `59144` | 11 | Destination | `0x176211869cA2b568f2A7D4EE941E073a821EE1ff` |
+| Codex | `81224` | 12 | Destination | `0xd996633a415985DBd7D6D12f4A4343E31f5037cf` |
+| Sonic | `146` | 13 | Destination | `0x29219dd400f2Bf60E5a23d13Be72B486D4038894` |
+| World Chain | `480` | 14 | Destination | `0x79A02482A880bCe3F13E09da970dC34dB4cD24D1` |
+| Monad | `143` | 15 | Destination | `0x754704Bc059F8C67012fEd69BC8A327a5aafb603` |
+| Sei | `1329` | 16 | Destination | `0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392` |
+| XDC | `50` | 18 | Destination | `0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1` |
+| HyperEVM | `999` | 19 | Destination | `0xb88339CB7199b77E23DB6E890353E22632Ba630f` |
+| Ink | `57073` | 21 | Destination | `0x2D270e6886d130D724215A266106e6832161EAEd` |
+| Plume | `98866` | 22 | Destination | `0x222365EF19F7947e5484218551B56bb3965Aa7aF` |
+| Arc | `5042` | 26 | Settlement + destination | `0x3600000000000000000000000000000000000000` |
+
+**Testnet** — Circle's sandbox attestation service (`iris-api-sandbox.circle.com`).
+
+| Network | Chain ID | CCTP domain | Role | USDC |
+| --- | ---: | ---: | --- | --- |
+| Ethereum Sepolia | `11155111` | 0 | Destination | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| Avalanche Fuji | `43113` | 1 | Destination | `0x5425890298aed601595a70AB815c96711a31Bc65` |
+| OP Sepolia | `11155420` | 2 | Destination | `0x5fd84259d66Cd46123540766Be93DFE6D43130D7` |
+| Arbitrum Sepolia | `421614` | 3 | Settlement + destination | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
+| Base Sepolia | `84532` | 6 | Settlement + destination | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Polygon Amoy | `80002` | 7 | Destination | `0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582` |
+| Unichain Sepolia | `1301` | 10 | Destination | `0x31d0220469e10c4E71834a79b1f276d740d3768F` |
+| Linea Sepolia | `59141` | 11 | Destination | `0xFEce4462D57bD51A6A552365A011b95f0E16d9B7` |
+| Codex Testnet | `812242` | 12 | Destination | `0x6d7f141b6819C2c9CC2f818e6ad549E7Ca090F8f` |
+| World Chain Sepolia | `4801` | 14 | Destination | `0x66145f38cBAC35Ca6F1Dfb4914dF98F1614aeA88` |
+| Monad Testnet | `10143` | 15 | Destination | `0x534b2f3A21130d7a60830c2Df862319e593943A3` |
+| Sei Testnet | `1328` | 16 | Destination | `0x4fCF1784B31630811181f670Aea7A7bEF803eaED` |
+| Ink Sepolia | `763373` | 21 | Destination | `0xFabab97dCE620294D2B0b0e46C68964e326300Ac` |
+| Arc Testnet | `5042002` | 26 | Settlement + destination | `0x3600000000000000000000000000000000000000` |
+
+<!-- END:cctp-destinations -->
+
+**X Layer is deliberately absent.** CCTP supports it, but Circle's Forwarding Service does not
+(`Destination domain not supported for forwarding`). Since the architecture relies on forwarding
+for the destination mint, a burn to X Layer would leave the payee uncredited, so the chain was
+removed rather than listed and quietly broken. `scripts/verify-cctp-candidates.mts` keeps it as a
+negative control: if that check ever stops failing for X Layer, the check itself is wrong.
+
+Solana, Sui, Aptos and Stellar have CCTP support but are not EVM chains, so an EVM recipient
+address cannot be expressed for them. Sonic has no testnet entry because Circle publishes two
+testnet USDC addresses for it and neither verified on any public Sonic testnet RPC.
 
 ## Technology Stack
 
@@ -791,8 +940,9 @@ redeemed through the configured execution infrastructure.
 | Decision contracts | GenLayer Python Intelligent Contracts | Registry, policy evaluation, finality, and history |
 | GenLayer client | `genlayer-js` | Contract deployment, reads, and writes |
 | Execution | 1Shot ERC-7710 relayer | Approved EVM payment execution |
-| EVM network | Base Sepolia | Current USDC settlement network |
-| Optional vault contracts | Solidity 0.8.24 and Foundry | Future user-funded treasury rail |
+| Settlement networks | Base, Base Sepolia, Arc, Arc Testnet | USDC settlement rails |
+| Cross-chain transfer | Circle CCTP v2 + Forwarding Service | Pay an approved request on any supported network |
+| Vault contracts | Solidity 0.8.24 and Foundry | `AgentTreasury` rail used for all Arc settlement |
 | Relay worker | Node.js and TypeScript | Authenticated retry trigger |
 | Shared package | TypeScript and viem | Chains, tokens, ABIs, and common types |
 | Hosting | Vercel | Production Next.js application and cron |
@@ -1002,12 +1152,18 @@ At the time of the production smoke test, the registered policy reported:
 
 ## Known Limitations
 
-- The current production payment rail is Base Sepolia USDC only.
-- Base Mainnet is advertised by 1Shot but remains blocked until its isolated
-  registry, signers, secrets, worker, and real-fund launch tests are deployed.
-- X Layer and native OKB are configuration-ready but not active execution
-  options.
-- There is no active user-funded vault fallback in production.
+- Arc Mainnet payout signing is not yet enabled: the contracts are deployed and
+  verified and a vault can be deployed and funded, but
+  `ARC_MAINNET_EXECUTOR_PRIVATE_KEY` must be set and funded with Arc USDC gas
+  before a mainnet payout can be signed. It does not fall back to the testnet
+  key on purpose.
+- Arbitrum Sepolia is in the chain registry but no 1Shot relayer answers for it
+  in either environment, so a delegation there cannot execute. It is refused at
+  the capability check rather than created.
+- Sonic has no testnet destination entry: Circle publishes two testnet USDC
+  addresses for it and neither verified against a public Sonic testnet RPC.
+- Non-EVM CCTP domains (Solana, Sui, Aptos, Stellar) are not payout
+  destinations, because an EVM recipient address cannot address them.
 - Wallets without `wallet_requestExecutionPermissions` cannot complete the
   ERC-7715 setup flow.
 - The platform signer and application secrets remain trusted server

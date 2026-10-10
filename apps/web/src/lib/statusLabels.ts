@@ -69,3 +69,20 @@ export function statusToneClass(value: string | undefined | null): string {
 export function isTerminalStatus(value: string | undefined | null): boolean {
   return value === "executed" || value === "denied" || value === "not_applicable";
 }
+
+/**
+ * What the transaction column should say when there is no transaction hash.
+ *
+ * A denied request has no hash and never will, so showing "Pending" described it as waiting for a
+ * settlement that was already refused. The two cases are genuinely different: "Rejected" means
+ * nothing was sent and nothing will be, "Pending" means a hash is still expected.
+ */
+export function missingTxLabel(
+  status: string | undefined | null,
+  verdict?: string | undefined | null,
+): "Rejected" | "Pending" {
+  if (verdict === "denied") return "Rejected";
+  if (status === "denied" || status === "not_applicable") return "Rejected";
+  return "Pending";
+}
+

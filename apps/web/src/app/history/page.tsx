@@ -5,7 +5,7 @@ import { ExternalLink, RefreshCw } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { ProtectedOwnerPage } from "@/components/ProtectedOwnerPage";
 import { friendlyError } from "@/lib/errors";
-import { statusLabel, statusToneClass } from "@/lib/statusLabels";
+import { missingTxLabel, statusLabel, statusToneClass } from "@/lib/statusLabels";
 
 interface HistoryRow {
   request_id: string;
@@ -113,7 +113,11 @@ export default function HistoryPage() {
                       <a href={row.explorer_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-purple">
                         {row.tx_hash.slice(0, 10)}... <ExternalLink size={12} />
                       </a>
-                    ) : <span className="text-neutral-600">Pending</span>}
+                    ) : (
+                      <span className={row.verdict === "denied" ? "text-danger" : "text-neutral-600"}>
+                        {missingTxLabel(row.status, row.verdict)}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

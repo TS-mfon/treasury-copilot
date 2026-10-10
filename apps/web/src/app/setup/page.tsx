@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useAccount, useConnect, useSignTypedData } from "wagmi";
 import { CheckCircle2, Clipboard, Fuel, KeyRound, LoaderCircle, ShieldCheck, WalletCards } from "lucide-react";
 import { isAddress, zeroAddress, type Address } from "viem";
@@ -68,6 +69,9 @@ export default function SetupPage() {
   const [grant, setGrant] = useState<TreasuryDelegationGrant | null | undefined>(null);
   const [status, setStatus] = useState("");
   const [apiKey, setApiKey] = useState("");
+  // Reported by VaultFunding. Needed because "fund your vault" should only be pushed at someone
+  // whose vault is actually empty, and a failed balance read must not be treated as empty.
+  const [vaultBalance, setVaultBalance] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [setupError, setSetupError] = useState("");
   const [isDelegating, setIsDelegating] = useState(false);
@@ -445,7 +449,8 @@ export default function SetupPage() {
                 <p className="mt-2 break-all text-neutral-300">{vault}</p>
                 <p className="mt-2 text-neutral-300">
                   A new vault is empty. Fund it now so your agent can actually pay, then register it
-                  below. You can always top it up again later.
+                  below. You can always top it up again later from{" "}
+                  <Link href="/top-up" className="text-purple underline">Top up</Link>.
                 </p>
               </div>
               <div className="mt-4">
@@ -453,6 +458,11 @@ export default function SetupPage() {
                   chainKey={chainKey}
                   vault={vault}
                   label={agentName.trim() || undefined}
+                  onBalance={setVaultBalance}
+                  // Issuing the key is the moment setup feels finished, so that is when an empty
+                  // vault has to become impossible to miss: deploying a vault is not funding it,
+                  // and the first request against an empty one is refused with 402 vault_unfunded.
+                  highlight={Boolean(apiKey) && vaultBalance === "0"}
                 />
               </div>
             </>

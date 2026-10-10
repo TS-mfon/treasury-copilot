@@ -50,12 +50,33 @@ function arcChainConfig(chainId: number): ChainConfig {
   return chain;
 }
 
-export function arcExecutorAccount() {
-  const key = process.env.ARC_EXECUTOR_PRIVATE_KEY?.trim();
-  if (!key) throw new Error("Arc executor is not configured");
+/** Arc Mainnet. Named so the chain-id checks below read as intent rather than a magic number. */
+export const ARC_MAINNET_CHAIN_ID = 5042;
+export const ARC_TESTNET_CHAIN_ID = 5042002;
+
+/**
+ * The executor key for an Arc chain.
+ *
+ * Mainnet reads `ARC_MAINNET_EXECUTOR_PRIVATE_KEY` and **never falls back** to the testnet
+ * variable. The fallback is the dangerous part, not the duplication: a deployment that already
+ * has `ARC_EXECUTOR_PRIVATE_KEY` set for testnet would otherwise start signing real-USDC
+ * mainnet payouts with a key that was provisioned, funded and handled as a testnet key, and
+ * nothing in the logs would say so. Requiring a separate variable makes reusing one key a
+ * decision someone has to write down (by setting both to the same value) rather than an accident.
+ */
+function executorKeyVariable(chainId: number): "ARC_MAINNET_EXECUTOR_PRIVATE_KEY" | "ARC_EXECUTOR_PRIVATE_KEY" {
+  return chainId === ARC_MAINNET_CHAIN_ID
+    ? "ARC_MAINNET_EXECUTOR_PRIVATE_KEY"
+    : "ARC_EXECUTOR_PRIVATE_KEY";
+}
+
+export function arcExecutorAccount(chainId: number = ARC_TESTNET_CHAIN_ID) {
+  const variable = executorKeyVariable(chainId);
+  const key = process.env[variable]?.trim();
+  if (!key) throw new Error(`Arc executor is not configured: set ${variable}`);
   const normalized = key.startsWith("0x") ? key : `0x${key}`;
   if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
-    throw new Error("Arc executor private key must be exactly 32 bytes of hex");
+    throw new Error(`${variable} must be exactly 32 bytes of hex`);
   }
   const account = privateKeyToAccount(normalized as Hex);
   if (account.address.toLowerCase() === platformSignerAddress()?.toLowerCase()) {
@@ -73,7 +94,7 @@ function platformSignerAddress(): string | undefined {
 }
 
 function rpcUrlFor(chain: ChainConfig) {
-  if (chain.chainId === 5042002) {
+  if (chain.chainId === ARC_TESTNET_CHAIN_ID) {
     return process.env.ARC_TESTNET_RPC_URL ?? process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL;
   }
   return process.env.ARC_RPC_URL ?? process.env.NEXT_PUBLIC_ARC_RPC_URL;
@@ -93,7 +114,7 @@ export function arcPublicClient(chainId: number) {
 export async function preflightArcVaultPayout(request: ArcVaultPayoutRequest, maxFee = 0n) {
   const chain = arcChainConfig(request.chainId);
   const client = arcPublicClient(request.chainId);
-  const account = arcExecutorAccount();
+  const account = arcExecutorAccount(request.chainId);
   const at = { address: request.vault, abi: agentTreasuryAbi } as const;
 
   const [executed, executor, paused, availableBalance, feeReserve, gas] = await Promise.all([
