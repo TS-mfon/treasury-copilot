@@ -136,6 +136,32 @@ test("each delegated chain names the relayer that actually serves it", () => {
   assert.equal(SUPPORTED_CHAINS.arbitrumSepolia.relayerUrl, undefined);
 });
 
+test("the registry relayer wins over the global override, per chain", async () => {
+  const { __resolveRelayerUrl } = await import("../src/lib/oneShot7710");
+
+  // The override was set to the dev relayer in production. If it won, every Base Mainnet payout
+  // would be sent to a relayer that returns {} for 8453 and fail as "unsupported on this
+  // network" — a single global value cannot be right for something that differs per chain.
+  withEnv({ ONE_SHOT_RELAYER_URL: ONE_SHOT_RELAYER_TESTNET }, () => {
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+    assert.equal(__resolveRelayerUrl("84532"), ONE_SHOT_RELAYER_TESTNET);
+  });
+
+  // The override still covers chains the registry does not name, which is the case an operator
+  // pointing at their own relayer actually needs.
+  withEnv({ ONE_SHOT_RELAYER_URL: "https://relayer.example.test/relayers" }, () => {
+    assert.equal(__resolveRelayerUrl("421614"), "https://relayer.example.test/relayers");
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+  });
+
+  // With nothing set, a named chain still resolves and an unknown one falls back rather than
+  // throwing, so a misconfiguration surfaces at the capability check with a clear message.
+  withEnv({ ONE_SHOT_RELAYER_URL: undefined, NEXT_PUBLIC_ONE_SHOT_RELAYER_URL: undefined }, () => {
+    assert.equal(__resolveRelayerUrl("8453"), ONE_SHOT_RELAYER_MAINNET);
+    assert.equal(__resolveRelayerUrl("999999"), ONE_SHOT_RELAYER_TESTNET);
+  });
+});
+
 test("the Arc executor key is validated and must differ from the platform signer", async () => {
   const { arcExecutorAccount } = await import("../src/lib/arcVault");
   const keyA = `0x${"11".repeat(32)}`;

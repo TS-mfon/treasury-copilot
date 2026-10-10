@@ -37,24 +37,33 @@ export interface OneShotExecutionResult {
 /**
  * The relayer that serves a given chain.
  *
- * 1Shot runs two relayers and they are split by environment, which was confirmed by calling
+ * 1Shot runs two relayers and they are split by environment, confirmed by calling
  * `relayer_getCapabilities` on each: production answers for Ethereum, Base, Arbitrum, OP and
  * Polygon mainnet and returns `{}` for Base Sepolia, while dev answers for Base Sepolia and
- * returns `{}` for every mainnet. A single global URL therefore cannot serve both Base Sepolia
- * and Base Mainnet — picking one silently breaks the other, which is why this resolves per chain.
+ * returns `{}` for every mainnet. So a single URL cannot serve both Base Sepolia and Base
+ * Mainnet, and this resolves per chain.
  *
- * An explicit `ONE_SHOT_RELAYER_URL` still wins, so an operator can point a deployment at their
- * own relayer; it just cannot be the way both environments are served at once.
+ * The registry deliberately takes precedence over `ONE_SHOT_RELAYER_URL`. That variable was set
+ * to the dev relayer in production, so letting it win would have sent Base Mainnet to a relayer
+ * that does not serve it and failed every mainnet payout with "unsupported on this network" —
+ * a global setting cannot be correct for a value that differs per chain.
+ *
+ * The variable is still honoured for any chain the registry does not name, which is what an
+ * operator pointing at their own relayer actually needs: it covers the chains we have no verified
+ * answer for, and cannot override the ones we do.
  */
 function oneShotRpcUrl(chainId?: string) {
-  const override = process.env.ONE_SHOT_RELAYER_URL ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL;
-  if (override) return override;
   if (chainId) {
     const configured = chainById(Number(chainId))?.relayerUrl;
     if (configured) return configured;
   }
-  return ONE_SHOT_RELAYER_TESTNET;
+  return process.env.ONE_SHOT_RELAYER_URL
+    ?? process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
+    ?? ONE_SHOT_RELAYER_TESTNET;
 }
+
+/** Exposed for the relayer-resolution test, which must not reach the network. */
+export const __resolveRelayerUrl = oneShotRpcUrl;
 
 function platformPrivateKey() {
   const key = process.env.AGENT_SIGNER_PRIVATE_KEY;

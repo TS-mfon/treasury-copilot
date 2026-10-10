@@ -93,11 +93,12 @@ export async function GET() {
     registry: process.env.GENLAYER_REGISTRY || process.env.NEXT_PUBLIC_GENLAYER_REGISTRY ? "configured" : "missing",
     base_sepolia: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL ? "configured" : "default_chain_rpc",
     base_mainnet: allowedChainIds().includes("8453") ? "allowlisted" : "not_allowlisted",
-    // The relayer is resolved per chain from the registry, so a single global URL is now an
-    // override rather than the mechanism. Reported as such to avoid implying it gates anything.
+    // The relayer is resolved per chain from the registry, which takes precedence over the global
+    // variable — that variable was set to the dev relayer, which does not serve Base Mainnet.
+    // Reported as a fallback so it cannot be mistaken for the mechanism.
     one_shot: process.env.ONE_SHOT_RELAYER_URL || process.env.NEXT_PUBLIC_ONE_SHOT_RELAYER_URL
-      ? "configured:override"
-      : "configured:per_chain",
+      ? "per_chain:with_fallback"
+      : "per_chain",
     arc_testnet: arcTestnet,
     arc_mainnet: arcMainnet,
     policy_source: policySource,
