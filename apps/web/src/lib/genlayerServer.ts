@@ -38,10 +38,21 @@ function account() {
 }
 
 function client() {
-  cachedClient ??= createClient({
-    chain: studionet,
-    account: account(),
-  });
+  if (!cachedClient) {
+    // Keep server writes on the same configured GenLayer RPC as browser reads.
+    // The SDK's bundled StudioNet URL can change independently of our deployment
+    // configuration (and may return the Studio HTML page instead of JSON-RPC).
+    const rpcUrl = process.env.GENLAYER_RPC_URL?.trim()
+      || process.env.NEXT_PUBLIC_GENLAYER_RPC_URL?.trim();
+    if (!rpcUrl) throw new Error("GENLAYER_RPC_URL is not configured");
+    cachedClient = createClient({
+      chain: {
+        ...studionet,
+        rpcUrls: { default: { http: [rpcUrl] } },
+      },
+      account: account(),
+    });
+  }
   return cachedClient;
 }
 
