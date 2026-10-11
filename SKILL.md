@@ -1,361 +1,404 @@
 ---
-name: treasury-copilot-project
-description: Repository guide for understanding, changing, operating, and troubleshooting Treasury Copilot.
+name: treasury-copilot-agent-api
+description: How an autonomous agent should authenticate to Treasury Copilot, inspect its treasury, submit and poll payment requests, recover safely, and handle API errors.
 ---
 
-# Treasury Copilot Project Skill
+# Treasury Copilot Agent API Skill
 
-Use this guide whenever you work in this repository. It explains the product model, architecture,
-source of truth, development workflow, security boundaries, and the safest way to make and verify
-changes. Product behavior and deployments change; inspect the current code and linked operational
-documents before relying on values or status recorded here.
+Use this skill when acting as a Treasury Copilot agent client. It is an operating guide for making
+API requests and interpreting their results. It is not a guide for deploying or changing this
+repository.
 
-## 1. Project identity
+The complete API contract is [`docs/api.md`](docs/api.md), with machine-readable schemas in
+[`apps/web/public/openapi.json`](apps/web/public/openapi.json). If a field or response differs,
+follow the live API response and current OpenAPI contract, and report the discrepancy. The live
+deployment may be configured differently from local examples.
 
-Treasury Copilot is a policy-controlled payment service for autonomous agents. A human owner
-authorizes bounded funding authority and configures an isolated policy for an agent. The agent
-authenticates to a normal HTTPS API and requests payments. The service validates and records the
-request on GenLayer, waits for the policy decision, and executes only approved requests through
-the configured settlement rail.
+## 1. What the API lets you do
 
-The agent receives an API key. It does not receive the owner's wallet key, the platform signing
-key, or raw wallet delegation data. The service is not trustless: owners trust the application to
-protect server secrets, GenLayer to decide policy, and the selected EVM contracts and execution
-provider to behave as configured.
+The owner gives the agent a `tcp_...` bearer API key. The key is bound to one agent, owner,
+policy, funding account, settlement chain, and token. Use it to read the policy and balance,
+request a payment, poll that request, and inspect history. The agent does not sign blockchain
+transactions and must not request or use the owner's wallet key, platform signer, Arc executor
+key, MetaMask delegation payload, or permission context.
 
-The important separation is:
+The agent requests payment; it does not make payment happen by itself. An HTTP `202` means the
+request was submitted and is being processed. It is not an approval or an EVM payment receipt.
+Only a request whose `execution_status` is `executed` represents a completed settlement. A
+GenLayer decision can be approved while its EVM execution is still pending or has failed.
 
-- **Policy and audit:** GenLayer StudioNet stores the registry, per-agent policies, decisions, and
-  execution evidence. It is the shared policy layer for every settlement network.
-- **Settlement:** USDC moves on a supported EVM network. The settlement network is not GenLayer.
-- **Destination:** An approved payment can be sent to a supported CCTP destination. A destination
-  chain is not necessarily a chain on which an owner can create a treasury.
+Arc is a settlement chain, not the policy RPC. If the owner has an Arc treasury, policy checks and
+request submission still happen through the service's GenLayer integration. The agent always
+calls the Treasury Copilot HTTPS API; it never calls Arc, GenLayer, or a relayer directly.
 
-For example, registering a vault on Arc Mainnet makes an Arc vault the funding and settlement
-account, but the `register_vault` state change still goes to the configured GenLayer RPC. Do not
-route GenLayer writes to Arc RPC or assume an Arc RPC error is a GenLayer consensus failure.
+## 2. Connection and credential handling
 
-## 2. Repository map
-
-| Path | Responsibility |
-| --- | --- |
-| `apps/web/` | Next.js 15 / React 19 application, owner UI, agent API, auth, policy orchestration, chain execution |
-| `apps/web/src/app/` | App Router pages and HTTP route handlers |
-| `apps/web/src/lib/` | Auth, GenLayer, EVM, delegation, execution, CCTP, evidence, and domain logic |
-| `apps/web/test/` | Node test runner tests for server and shared application behavior |
-| `apps/relay/` | Optional small HTTP worker that authenticates and triggers the web app's retry cron route |
-| `packages/shared/` | Shared viem chain registry, USDC configuration, contract ABIs, and common types |
-| `contracts/genlayer/` | GenLayer Python `TreasuryRegistry` and `TreasuryPolicy` contracts |
-| `contracts/evm/` | Solidity treasury/factory contracts, Foundry scripts, and EVM tests |
-| `scripts/` | Contract smoke tests, network verification, deployment support, and generated docs helpers |
-| `docs/api.md` | Normative agent-facing API contract and request semantics |
-| `docs/deployment.md` | GenLayer, Vercel, relay, and settlement deployment instructions |
-| `docs/arc.md` | Arc parameters, vault behavior, CCTP, and deployment evidence |
-| `docs/arc-testing-guide.md` | Arc operational and integration verification guide |
-| `apps/web/public/openapi.json` | Machine-readable public API contract |
-| `docs/treasury-copilot.postman_collection.json` | Postman API examples |
-| `README.md` | Product overview, architecture, current chain support, and quick local development |
-
-Start with source code for behavior. Use API and deployment documentation for protocol and
-operational procedures. If documents conflict with implementation, identify the disagreement
-explicitly and check recent deployment history before changing a live-facing assumption.
-
-## 3. High-level architecture
+Default production API base:
 
 ```text
-Owner browser + MetaMask
-        |
-        v
-Next.js owner UI and API  <---- Agent HTTPS API
-        |                                |
-        +-------- GenLayer StudioNet -----+---- registry, policy, decisions, audit
-        |
-        +-------- settlement rail ------------ Base / Arc / supported EVM networks
-                 |                             1Shot or AgentTreasury executor
-                 +-------- Circle CCTP v2 ------ supported payout destination
-
-Optional relay worker --> authenticated Next.js cron endpoint
+https://treasurycopilot.app/api/v1
 ```
 
-### Owner setup and policy binding
+Set these values from the owner or the agent runtime's secret store:
 
-1. The owner authenticates with a wallet challenge and an HTTP-only session.
-2. The owner selects an eligible settlement chain and USDC token and configures policy limits,
-   recipients, and human-readable policy text.
-3. The owner signs fresh EIP-712 authorization for the setup action.
-4. For delegated settlement, MetaMask grants a bounded ERC-7715 permission. The service validates
-   the permission and stores the exact context/payload on the policy.
-5. For Arc settlement, the owner deploys an `AgentTreasury` vault through the chain's factory and
-   registers its address as the delegated/funding account. Arc does not use the ERC-7715 / 1Shot
-   path.
-6. The server deploys or updates a per-agent GenLayer policy, records the owner-agent-policy
-   binding in the registry, records the funding binding, and reads the state back for exact
-   verification.
-7. Only after successful registration and readback does the server issue the signed `tcp_` API
-   key. The UI shows it once.
+```text
+TREASURY_API_BASE=https://treasurycopilot.app/api/v1
+TREASURY_API_KEY=tcp_...
+AGENT_ADDRESS=0x...
+```
 
-Registration is multi-step and can have already completed some on-chain operations when a later
-step fails. Diagnose the current registry and policy state before blindly repeating actions.
+Send the key only as an HTTP authorization header:
 
-### Agent spend lifecycle
+```http
+Authorization: Bearer tcp_...
+Accept: application/json
+Content-Type: application/json
+```
 
-1. `POST /api/v1/spend` authenticates the API key and validates the request, token precision,
-   policy binding, identity, destination, limits, evidence, and idempotency key.
-2. The service records/submits the request to the policy on GenLayer using the server platform
-   signer. A successful submission normally returns `202 Accepted` and a request ID; it does not
-   mean that settlement has completed.
-3. The service or authenticated retry worker observes GenLayer finality and the execution result.
-4. A denial remains auditable and is not executed.
-5. An approval can proceed only after all deterministic checks and finality requirements pass.
-   Delegated chains execute through 1Shot within the owner's permission. Arc uses the isolated
-   vault executor. Eligible cross-chain payments use Circle CCTP v2 and its forwarding flow.
-6. The outcome and EVM transaction evidence are recorded on GenLayer and exposed through status
-   and history endpoints.
+Never put the key in a URL, query parameter, source file, browser bundle, log, analytics event,
+prompt, or error report. Do not decode the key and assume its claims are still valid: the owner can
+rotate it, revoke it, or change the on-chain binding. Let the API validate it each time.
 
-Finalized GenLayer status alone is not success. Check consensus result, leader execution, rollback
-payloads, and (for deployment) schema/code or readback. The helpers in `genlayerServer.ts` enforce
-this for application writes; preserve those fail-closed checks.
+Keys are shown to the owner once and expire after 30 days. On `401`, stop making requests and ask
+the owner to provide a valid current key. Do not repeatedly retry a rejected key.
 
-## 4. Chain and settlement model
+## 3. Required safe workflow before requesting a payment
 
-`packages/shared/src/index.ts` is the canonical code source for chain IDs, token addresses, CCTP
-domains, destination eligibility, settlement backends, and per-chain relayer configuration.
-`README.md` contains generated chain tables: update the registry and use the documented generator
-rather than hand-editing generated table regions.
+Follow this sequence for each payment intent:
 
-The main backend types are:
+1. **Identify the payment intent.** Establish the actual invoice/order, amount, recipient address,
+   currency, due date, and reason. Do not invent or infer a recipient from a merchant name.
+2. **Choose a stable idempotency key.** Use a unique key for this real-world intent, such as an
+   invoice ID plus period. Keep the same key for every retry or recovery of that payment.
+3. **Read the policy.** Call `GET /policy` and inspect its safe policy state, destination rules,
+   policy text, and recipient whitelist. Use `whitelisted_recipients` when whitelist enforcement
+   is enabled. If no verified recipient is available, stop and ask the owner; do not guess.
+4. **Check spend readiness.** Call `GET /balance`. Inspect `ready_to_spend`, `blockers`, `balance`,
+   `weekly_available`, `per_tx_cap`, chain, token, and `security.warnings`. Stop for an owner or
+   operator action when the response reports blockers or warnings that make the proposed payment
+   unsafe. Balance does not override policy limits.
+5. **Check amount and destination.** The amount must be affordable under both the available
+   balance and policy caps. If using `destination_chain`, use a supported chain the policy permits
+   and the owner has authorized. The treasury settlement chain and payout destination are different
+   concepts.
+6. **Attach evidence when required.** Evidence must be real and match the exact invoice, recipient,
+   and amount. Never fabricate evidence, signatures, invoice URLs, or merchant identity.
+7. **Submit once.** Send `POST /spend` with the complete request. Save the `request_id`, `poll_url`,
+   `idempotency_key`, returned status, and correlation ID. Do not submit the same intent under a
+   new key just because the call timed out or is still pending.
+8. **Poll the same request.** Follow `poll_url` or `GET /requests/{request_id}` until the request
+   is denied, executed, or needs an owner/operator decision. Respect `Retry-After`; use 10 seconds
+   when absent and apply bounded backoff if the service is temporarily unavailable.
+9. **Confirm before reporting success.** Report payment complete only when `execution_status` is
+   `executed`. Include the transaction hash and chain when present. An `approved` verdict alone is
+   not proof that funds moved.
 
-- `delegated-7710`: owner-authorized ERC-7715 permission executed by the matching 1Shot relayer.
-- `arc-vault`: owner-deployed `AgentTreasury`, paid by the separate platform Arc executor.
+The owner controls setup and API-key issuance. If the agent has no key, a key is expired, or a
+policy/funding binding is absent, ask the owner to finish or repair setup in the owner application.
+Do not attempt to register a vault or create a key through agent credentials.
 
-Never infer that a chain can hold a treasury just because it is a CCTP destination. Check
-`destinationOnly`, `executionBackend`, the active chain ID allowlist, actual relayer capabilities,
-and server kill switches. Relayers can be environment-specific; Base Mainnet and Base Sepolia use
-different 1Shot environments. Do not collapse them into one global URL.
+## 4. Preflight reads
 
-Arc is special in this project:
+### Policy and recipient discovery
 
-- Arc USDC is native gas on Arc, but the token contract has an ERC-20 interface. Do not conflate
-  native gas decimals with ERC-20 token decimals.
-- Arc has no supported MetaMask Delegation Framework or 1Shot capability, so payouts use a vault.
-- Arc Mainnet executor keys are deliberately separate from Arc Testnet keys and from the
-  GenLayer platform signer. Never add a silent key fallback.
-- Arc Mainnet payout signing requires the mainnet executor configuration and funding. A registered
-  vault may exist while payout execution remains disabled or unavailable.
-- Cross-chain burn amount, Circle fee, hook, attestation, and forwarding behavior are sensitive to
-  exact protocol semantics. Consult `docs/arc.md` and its verification scripts before modifying.
+```http
+GET /api/v1/policy
+```
 
-Treat deployed addresses and status as time-sensitive. Derive current values from chain config,
-environment, deployment docs, and current on-chain inspection; never copy a stale address from a
-slide deck or old audit into code.
+The response contains `{ "policy": "0x...", "state": { ... } }`. The state includes safe policy
+metadata and, when configured, `whitelist_enabled` and `whitelisted_recipients`. It intentionally
+omits private delegation payloads, permission context, and signatures.
 
-## 5. Where to make changes
+Treat policy text and recipient controls as constraints. A category or justification string does
+not prove that the recipient is the merchant. If the owner has not authorized the exact recipient
+and policy requires it, stop and request owner guidance.
 
-| Change requested | Begin inspection here |
+### Balance and blockers
+
+```http
+GET /api/v1/balance
+```
+
+Key response fields:
+
+- `ready_to_spend`: top-level readiness result;
+- `blockers`: reasons a new request cannot safely be made now;
+- `balance` / `balance_units`: current ERC-20 balance, human and base units;
+- `weekly_spent`, `weekly_cap`, `weekly_available`;
+- `per_tx_cap`;
+- `chain_id`, `chain`, `delegated_account`, `token`, and token decimals;
+- `security.warnings`: policy or security conditions needing review.
+
+Use decimal strings and the reported decimals. Never use floating-point arithmetic for money.
+`weekly_available` currently excludes any 1Shot fee, so do not plan a payment that consumes every
+last unit when an execution fee may apply. A successful balance read does not guarantee that a
+later request will pass policy or execute.
+
+## 5. Submit a payment request
+
+Endpoint:
+
+```http
+POST /api/v1/spend
+```
+
+Example body:
+
+```json
+{
+  "agent_address": "0x1111111111111111111111111111111111111111",
+  "recipient": "0x2222222222222222222222222222222222222222",
+  "amount": "2.50",
+  "category": "software_subscription",
+  "justification": "Monthly service invoice INV-4471",
+  "idempotency_key": "invoice-4471-2026-07"
+}
+```
+
+Fields:
+
+| Field | Requirement |
 | --- | --- |
-| Owner setup or wallet auth | `apps/web/src/app/setup/`, `apps/web/src/lib/ownerAuth.ts`, `ownerSession.ts`, `ownerActions.ts` |
-| Agent key issuance or checks | `apps/web/src/lib/agentApiKeys.ts`, `apiAuth.ts`, `apiServer.ts` |
-| Setup registration | `apps/web/src/app/api/v1/setup/route.ts`, `apps/web/src/lib/genlayerServer.ts`, `executionBackend.ts` |
-| Spend validation/status/execution | `apps/web/src/app/api/v1/`, `apiServer.ts`, `automaticReview.ts`, `executionBackend.ts` |
-| GenLayer transactions | `apps/web/src/lib/genlayerServer.ts`, `contracts/genlayer/` |
-| Arc vault or CCTP | `apps/web/src/lib/arcVault.ts`, `arcFunding.ts`, `cctp.ts`, `cctpBridge.ts`, `gateway.ts`, `docs/arc.md` |
-| 1Shot execution | `apps/web/src/lib/oneShot7710.ts`, `apps/web/src/lib/relay.ts`, chain config |
-| Shared chain behavior | `packages/shared/src/index.ts`, then relevant chain/UI/API tests and generated docs |
-| Retry/cron | `apps/web/src/app/api/cron/execute/route.ts`, `automaticReview.ts`, `apps/relay/src/server.ts` |
-| API contract/docs | `docs/api.md`, `apps/web/public/openapi.json`, Postman collection, corresponding route code |
-| Pilot/admin tools | `apps/web/src/app/api/pilot/`, `pilotStore.ts`, `docs/testnet-pilot-operations.md` |
-| Solidity | `contracts/evm/src/`, associated Foundry tests/scripts, then shared ABIs and frontend integrations |
+| `agent_address` | Required; must exactly identify the agent bound to the API key. Use the owner's registered agent address. |
+| `recipient` | Required EVM address; use an owner-approved or independently verified address. |
+| `amount` | Required positive decimal **string**, no exponent, sign, or excess token precision. USDC currently uses six ERC-20 decimals. |
+| `category` | Required string, 2–64 characters. Descriptive only; it is not proof of purpose. |
+| `justification` | Required string, 4–1200 characters. State the real purpose and invoice/reference. It does not prove merchant identity. |
+| `idempotency_key` | Required stable key, 8–128 characters from letters, numbers, `.`, `_`, `:`, `-`. Reuse it for every attempt at the same payment. |
+| `evidence` | Optional array of up to three supported invoice evidence items when required by the policy. Evidence must match the request. |
+| `destination_chain` | Optional supported EVM chain ID, as an integer or decimal string. Include only when the payment should be delivered cross-chain and the policy permits it. |
 
-Search call sites before changing shared helpers. In this monorepo, a shared chain or API change
-can affect setup UI, API validation, funding, payout execution, health reporting, docs, and scripts.
+Amount must be a JSON string. `"25"`, `"25.0"`, and `"25.000000"` describe the same six-decimal USDC amount. JSON number `25`, `"1e2"`, `"-1"`, `"0"`, and values with more than six decimal places are invalid. Use the exact invoice amount and never round upward or change the amount to bypass a cap.
 
-## 6. Development commands
+For invoice URLs, submit the real HTTPS URL and required evidence fields as specified in
+[`docs/api.md`](docs/api.md) / OpenAPI. The service fetches and validates invoice evidence. Signed
+invoice evidence must use a valid owner/merchant signature; never create a fake signature or claim
+that an unsigned invoice is verified.
 
-Requirements and exact commands are documented in `README.md` and `docs/deployment.md`. The root
-uses npm workspaces; run commands from the repository root unless a command explicitly says
-otherwise.
+## 6. Understand the submission response
 
-```bash
-npm install
-npm run dev
-npm run relay:dev
-npm run typecheck
-npm run lint
-npm run test -w apps/web
-npm run test:evm
-npm run lint:genlayer
-npm run build
+A normal submission returns `202 Accepted`, usually with `Location` and `Retry-After` headers. The
+body contains a `request_id`, `poll_url`, `request`, `chain`, and `genlayer.request_tx_hash`.
+
+Example shape:
+
+```json
+{
+  "request_id": "0x...64 hex characters...",
+  "verdict": "pending",
+  "status": "submitted",
+  "poll_url": "/api/v1/requests/0x...",
+  "request": {
+    "request_id": "0x...",
+    "verdict": "pending",
+    "status": "submitted",
+    "execution_status": "submitted",
+    "execution_error": "",
+    "tx_hash": ""
+  },
+  "idempotent_replay": false,
+  "genlayer": { "request_tx_hash": "0x..." }
+}
 ```
 
-The relay is optional for local web development. It only invokes the authenticated web cron
-endpoint; it never accepts or signs payout instructions. The GenLayer linter target in the root
-script may cover only the policy contract, so use deployment docs for commands that lint both
-GenLayer contracts.
+The initial `request_id` is the real request identifier only after a request is submitted/visible.
+For a `202`, poll the returned `poll_url` (resolve a relative URL against `TREASURY_API_BASE`).
+Use the `Location` header if present. The `request_tx_hash` is the GenLayer transaction hash; it is
+not an EVM payment hash.
 
-Do not run tests, builds, deploys, smoke scripts, or on-chain verification unless the user asked
-for verification or the task requires it and that action is authorized. When authorized, run the
-narrowest useful checks first and report exactly what ran. Never claim an unrun check passed.
+`idempotent_replay: true` means the API found and returned the existing request for the same
+idempotency key and identical payment data. It means no new request was submitted. Continue
+polling that existing request; do not create a second key.
 
-## 7. Configuration and secrets
+## 7. Poll and interpret results
 
-`.env.example` is a template, not a complete guarantee of current production configuration.
-`apps/web/src/lib/env.ts` validates a subset of server configuration; several chain-specific
-settings are read directly at their usage sites. See `README.md`, `docs/deployment.md`, and
-`docs/arc.md` for the full environment model.
+Poll:
 
-Key variables include:
+```http
+GET /api/v1/requests/{request_id}
+Authorization: Bearer <key>
+```
 
-- GenLayer: `AGENT_SIGNER_PRIVATE_KEY`, `GENLAYER_REGISTRY`,
-  `NEXT_PUBLIC_GENLAYER_REGISTRY`, `GENLAYER_RPC_URL`, and
-  `NEXT_PUBLIC_GENLAYER_RPC_URL`. The server GenLayer client should use the configured RPC; the
-  public variable is the documented fallback. Keep registry addresses consistent across server
-  and browser.
-- Owner/API authentication: `OWNER_SESSION_SECRET`, `AGENT_API_KEY_SECRET`.
-- Retry: `CRON_SECRET`, `WEB_APP_URL`, `PORT`.
-- Relayer: `ONE_SHOT_RELAYER_URL` plus public counterpart where applicable; chain-specific URLs
-  can override it.
-- Arc: chain-specific RPC/factory/executor variables, `ARC_EXECUTOR_PRIVATE_KEY`,
-  `ARC_MAINNET_EXECUTOR_PRIVATE_KEY`, and `ARC_SETTLEMENT_ENABLED` as documented for the target
-  deployment.
-- CCTP/Gateway: `CCTP_ENABLED`, `GATEWAY_ENABLED`, supported chain RPC overrides.
-- Optional pilot operations: `MONGODB_URI`, `MONGODB_DB`, `ADMIN_WALLET_ALLOWLIST`.
+The returned object has a `request` containing at least a verdict, processing status,
+`execution_status`, `execution_error`, and transaction information. Read both `verdict` and
+`execution_status`; one field is not a substitute for the other.
 
-Never print secrets, include them in code or docs, pass them into public variables, commit local
-environment files, paste API keys or signatures into logs, or return full provider error bodies
-if they may echo credentials. Do not inspect secret values unless necessary; report whether a
-variable is configured rather than its value. Keep signer duties separated: the GenLayer registry
-gateway/reporter key must not be reused as an Arc executor key.
+| Status / verdict | Meaning | Agent action |
+| --- | --- | --- |
+| `submitted` | GenLayer submission accepted; decision may not be visible yet | Keep polling the same request. |
+| `reviewing` | GenLayer V5 comparative review is running | Keep polling; do not resubmit. |
+| `review_pending` / `pending` | Legacy V4 review/recovery is pending | Keep polling within your wait budget, then report still pending or investigate status. |
+| `approved` | Policy approved; execution may not have happened yet | Continue polling until execution completes or an actionable failure appears. |
+| `ready` | Approved and queued for executor | Continue polling. |
+| `executing` | The service currently holds the execution lease | Continue polling; do not start a parallel request. |
+| `bridging` | Cross-chain transfer is being completed | Continue polling; a source-chain burn is not yet proof that the destination received funds. |
+| `denied` | Policy refused the payment | Stop. Do not automatically change details and retry to evade the policy. Ask the owner if the payment is legitimate and needs authorization changes. |
+| `failed` | An execution attempt failed; the system may retry after its lease is released | Do not create a replacement payment. Poll the same request; escalate persistent `execution_error` with request/correlation IDs. |
+| `executed` | Execution receipt/hash was recorded | Confirm chain and transaction hash before reporting paid. |
+| `not_applicable` | Execution does not apply, normally because the request was denied | Treat as denied, not as a pending payment. |
+| `no_record` | No request exists for the queried idempotency key | See ambiguous-submission recovery below; do not poll `no_record` forever. |
 
-## 8. Security and implementation rules
+Use at least the server's `Retry-After` delay. The standard spend response suggests 10 seconds.
+Use a bounded polling window, add jitter for many concurrent agents, and avoid hammering the API.
+If the request remains pending after your operational wait limit, report that accurately and
+provide its request ID. Do not call it paid or denied without that result.
 
-These are core product invariants. Preserve them during refactors and describe explicitly if a
-requested change would alter one.
+`tx_hash` is authoritative only when `execution_status` is `executed`. For a cross-chain payment,
+also inspect destination transaction fields / explorer URL when returned. Report source and
+destination confirmation separately if the API represents them separately.
 
-1. **Never give an agent signing authority.** API credentials identify an agent; the server
-   platform signer submits GenLayer writes. Owner wallet and executor keys remain private.
-2. **Fail closed.** No API key on partial setup; no payout on uncertain or non-final verdict;
-   no execution after a GenLayer rollback; no fallback to another chain's signer.
-3. **Validate every binding.** Match API key claims against active registry state, including owner,
-   agent, policy, funding account, chain, token, key version, and active flag.
-4. **Use exact token arithmetic.** Parse decimal strings into integer token units. Do not use JS
-   floating point for money and do not accept exponent notation or excess precision.
-5. **Keep deterministic checks deterministic.** Identity, amount caps, weekly budget, destination
-   eligibility, whitelist, nonce, replay prevention, leases, and token parameters must not depend
-   on an LLM verdict.
-6. **Maintain idempotency.** A timeout is not proof a request was rejected. Resolve by the same
-   key or retry the identical request with the same idempotency key; do not mint a second payment.
-7. **Preserve evidence carefully.** Redact delegation payloads and secrets from API responses,
-   logs, errors, and UI. Keep stable machine-readable error codes for agents.
-8. **Verify state changes.** Read back registry/policy updates and validate exact values. For
-   deployments, inspect execution status and contract schema/code in addition to finality.
-9. **Respect chain roles.** Separate settlement-chain eligibility from CCTP destination eligibility
-   and from 1Shot capabilities. Check the capability on the proper environment.
-10. **Use fresh owner authorization.** Sensitive owner operations require the expected session and
-    fresh EIP-712 authorization. Do not weaken nonce/deadline/replay checks for convenience.
+## 8. Idempotency and ambiguous POST recovery
 
-Before changing transaction, signing, or settlement code, trace both success and failure paths,
-including retries, replays, partially completed setup, chain/environment selection, and stored
-readback. Do not invent trust assumptions absent from the implementation.
+An idempotency key identifies one real-world payment intent. The service derives a request ID from
+the policy, API key identity, and idempotency key. Same key + same payment data returns the existing
+request. Same key + changed recipient, amount, category, justification, destination, or evidence
+returns `409 idempotency_conflict`.
 
-## 9. API orientation
+If a POST times out, the connection drops, or the response cannot be parsed, the request may still
+have reached the service. Do not create a new key. Recover in this order:
 
-The normative reference is `docs/api.md`; use it rather than duplicating or guessing request
-semantics. The main agent routes are:
+1. Query `GET /requests?idempotency_key=<same-key>`.
+2. If it returns a request, poll that request.
+3. If it returns `404` with `error: "no_record"`, the current API says no request is visible in
+   GenLayer and explicitly says not to poll that lookup waiting for a record. Re-send the original
+   POST **once** with the identical body and the same idempotency key. This route behavior is the
+   current implementation; an older paragraph in `docs/api.md` describes a previous `202` lookup
+   behavior.
+4. If the repeated POST returns the existing request, continue polling it. If it fails again with
+   an upstream `502`/`503`, back off and repeat recovery using the same key.
 
-- `GET /api/v1/policy` — policy/binding information safe to expose to the agent.
-- `GET /api/v1/balance` — balance and policy limits.
-- `POST /api/v1/spend` — submit an idempotent payment request.
-- `GET /api/v1/requests` and `GET /api/v1/requests/[id]` — recover and poll request state.
-- `GET /api/v1/history` — authorized agent history.
-- `GET /api/v1/setup` and `POST /api/v1/setup` — owner-authorized registration/setup flow.
+Do not change any field under the same key. To request a genuinely different payment, first resolve
+the previous intent, then use a new key tied to the new invoice/payment intent.
 
-Owner auth and management routes live under `/api/auth/` and `/api/owner/`. Pilot/operator routes
-live under `/api/pilot/`. `/api/cron/execute` is secret-protected and must remain an operational
-retry route, not a public payout endpoint. `/api/health` reports service dependencies/configuration;
-it should not expose secret values.
+## 9. Error handling and retry policy
 
-Machine-readable contract: `apps/web/public/openapi.json`. If changing an API payload or response,
-update the route, docs, OpenAPI, Postman/examples where affected, and relevant error mapping. Keep
-idempotency/recovery semantics backward compatible where possible.
+Parse the JSON response body and branch on its stable `error` field, not the human `message`.
+Typical envelope:
 
-## 10. Troubleshooting workflow
+```json
+{
+  "error": "invalid_amount",
+  "message": "Amount has too many decimal places for this asset",
+  "fields": {},
+  "request_id": "corr_...",
+  "retryable": false
+}
+```
 
-For a reported failure:
+The `request_id` in an error may be a **correlation ID**, not a payment request ID. A real payment
+request ID is a 32-byte hex value (`0x` plus 64 hex characters) returned by a successful spend or
+read from state. Preserve `x-correlation-id` / error `request_id` when escalating errors.
 
-1. Find the user-facing text and route with `rg`, then follow calls down into the relevant
-   `src/lib` helper and contract method.
-2. Identify whether failure is local validation, owner authorization, RPC transport, GenLayer
-   submission, GenLayer finality/consensus, contract execution, EVM execution, or external CCTP /
-   relayer behavior. These are distinct layers.
-3. Inspect the response status and content type where HTTP is involved. HTML beginning with
-   `<!DOCTYPE` usually points to a wrong URL, proxy, platform error page, or stale endpoint, not a
-   valid JSON-RPC error.
-4. Check the actual server-side environment variable name and endpoint selection. Do not assume a
-   `NEXT_PUBLIC_` browser setting is used by a server SDK unless code explicitly wires it.
-5. Check chain ID, configured backend, deployment addresses, and feature/kill switches.
-6. For submitted GenLayer transactions, retain the hash and inspect lifecycle, consensus result,
-   leader execution and rollback output. Finalized may still mean contract execution failed.
-7. For EVM payouts, inspect the request record, executor/relayer response, receipt, token transfer
-   and resulting policy evidence. Do not resend under a new request key until replay state is
-   understood.
-8. Make the smallest safe fix, update documentation if configuration or operations change, and
-   state tests/verification performed and limitations.
+| HTTP / error | Meaning | What to do |
+| --- | --- | --- |
+| `400` `invalid_request` / `request_failed` | Malformed JSON, invalid request shape, or rejected operation | Fix payload. For an uncertain spend submission, use idempotency recovery before retrying. |
+| `401` `invalid_api_key` / `unauthorized` | Missing, expired, invalid, rotated, or revoked key | Stop; ask owner for a current key. |
+| `403` `agent_mismatch`, `policy_inactive`, `policy_not_allowed` | Agent/binding mismatch, revoked policy, or deployment allowlist refuses policy | Do not retry; owner/operator must correct binding or deployment. |
+| `404` `request_not_found` | Supplied request ID is malformed or not in this policy | Verify the returned request ID and authenticated agent. |
+| `404` `no_record` | No on-chain request is visible for the idempotency lookup | Do not poll this lookup. Re-send the identical original POST once with the same key. |
+| `409` `idempotency_conflict` | Same key was used with different request data | Stop. Recover/use original payload; never mutate a retry. |
+| `409` `policy_migration_required` / `vault_not_registered` | Owner setup or policy migration is incomplete | Ask owner to repair/re-register; agent cannot fix this. |
+| `402` `vault_unfunded` | Arc vault has no USDC | Stop and ask owner to fund the vault. Retry only after funding, with same payment key. |
+| `402` `insufficient_vault_balance` | Vault has funds but less than payment plus required fee | Ask owner to add funds; retry same payment after funding. |
+| `402` `insufficient_fee_reserve` | Cross-chain fee reserve is insufficient | Ask owner/operator to fund/repair fee reserve; do not lower/alter invoice without authorization. |
+| `422` `invalid_amount`, `invalid_evidence`, `invalid_request` | Request data invalid | Correct the actual input/evidence; do not bypass policy or fabricate evidence. |
+| `422` `unsupported_chain`, `unsupported_settlement_chain`, `unsupported_destination_chain`, `cross_chain_unavailable` | Unsupported or unavailable chain route | Ask owner for an allowed route. Never silently redirect funds. |
+| `422` `unsupported_wallet_capability`, `delegation_unavailable` | Owner wallet permission/setup issue | Ask owner to repair setup. |
+| `422` `policy_denied` | Policy denied the request | Stop; ask owner to review if business intent should be permitted. |
+| `422` `insufficient_balance` | Insufficient token balance or policy budget | Check `/balance`; ask owner to fund or approve a policy update. |
+| `429` `rate_limited` | Request rate limit reached | Honor `Retry-After` and reduce request/poll frequency. Reuse the same key for a spend retry. |
+| `502` `genlayer_unavailable` / `execution_unavailable` | GenLayer, RPC, or executor dependency unavailable | Retry only after backoff; preserve the same idempotency key and first recover ambiguous submissions. |
+| `503` `genlayer_undetermined`, `genlayer_busy`, `settlement_disabled`, `platform_signer_misconfigured` | Consensus uncertainty, capacity, disabled settlement, or operator configuration issue | For consensus/capacity, honor `Retry-After` and retry safely with same key. For disabled/configuration errors, stop and escalate to owner/operator. |
+| `500` or unexpected error | Internal failure | Preserve correlation ID. For a spend, recover by idempotency key before any retry. |
 
-Common cases:
+Some error codes can vary by deployment version. The HTTP status and response `error` are primary;
+the message explains the case but may change. Do not blindly retry every `retryable: true` response:
+observe `Retry-After`, keep retries bounded, and ensure the operation is idempotent. Do not retry
+terminal user/configuration errors until the owner/operator has corrected their cause.
 
-- **Vault registration gives HTML/JSON parse error:** Arc is only the settlement network. The
-  `register_vault` call is a GenLayer write. Verify that server GenLayer client uses the configured
-  StudioNet JSON-RPC endpoint (`GENLAYER_RPC_URL` or documented public fallback), and that the
-  endpoint returns JSON-RPC rather than an HTML page. Check registry/policy state before retrying.
-- **Setup reports gateway authorization failure:** compare the derived platform signer with the
-  registry's authorized gateway and verify both registry env variables point to the same active
-  deployment.
-- **Finalized write has no usable state:** inspect execution result and GenVM rollback details,
-  then confirm readback. Never treat consensus finality as sufficient evidence.
-- **Approved request is not paid:** inspect `execution_status` and `execution_error`; preserve the
-  original request/idempotency key and use the supported retry/recovery path.
-- **Delegation setup fails:** verify wallet capability, chain switch, token, time window, amount,
-  delegate address, permission context, and exact readback. MetaMask granting permission is not
-  the same as registering the policy.
-- **Arc payout does not sign:** verify Arc settlement is enabled, the proper network-specific
-  executor key/address is configured and separated from the GenLayer signer, and the executor is
-  funded for Arc gas. Do not substitute the testnet key for mainnet.
-- **Cross-chain transfer stalls:** check Circle environment (mainnet/testnet), source/destination
-  eligibility, burn message, fee, attestation, and forwarding support. Do not assume all CCTP
-  domains are forwarding destinations.
-- **Agent receives `no_record`:** this means no request is visible under that key in GenLayer. Use
-  the returned recovery instructions and same idempotency key; do not treat a derived request ID
-  as proof of submission or payment.
+### Backoff
 
-## 11. Documentation and generated artifacts
+For retryable upstream failures only, use exponential backoff with jitter, for example roughly
+2s, 4s, 8s, 16s, capped at 60s, while honoring any larger `Retry-After`. Limit attempts and then
+escalate with the correlation ID. For polling, use the server's `Retry-After` or a conservative
+interval such as 10 seconds. Rate-limit responses require a longer pause according to their
+header.
 
-Maintain one source of truth. Shared chain definitions live in `packages/shared/src/index.ts`;
-generated README network tables say so in their marker comments. OpenAPI and Postman contracts must
-track the implemented routes. Deployment addresses, signer roles, required env variables, kill
-switches, and network capabilities belong in the relevant operational docs.
+## 10. History and request discovery
 
-Do not add confidential operational data to examples. Treat investor materials, screenshots,
-generated decks, local artifacts, and unrelated untracked files as out of scope unless the user
-specifically requests work on them. Stage only files relevant to the task.
+```http
+GET /api/v1/requests/{request_id}
+GET /api/v1/requests?idempotency_key={stable-key}
+GET /api/v1/history?limit=25
+GET /api/v1/policy
+GET /api/v1/balance
+```
 
-## 12. Git and delivery
+History limit is an integer from 1 to 100. Request IDs must be `0x` plus exactly 64 hex digits.
+These endpoints require the same bearer key and return only the key's bound policy data. Do not
+try to inspect another agent's policy or enumerate other owners.
 
-- Check `git status`, current branch, and diff before editing and before committing.
-- Preserve user changes. Do not reset, clean, or stage unrelated files.
-- Do not create a commit or push unless the user explicitly asks; if asked, commit only the
-  intended files and push the requested branch/remote.
-- Do not deploy, submit on-chain transactions, move funds, rotate keys, or change production env
-  without explicit authorization for that action.
-- In the final report, summarize changed files, user-visible effects, checks that actually ran,
-  and whether the change was committed or pushed.
+Treat values returned by the service as source of truth for current request state. Do not rely on a
+locally cached decision or an old transaction hash. When a response includes `execution_error`,
+report it without inventing a new cause and include the associated request/correlation identifiers.
 
-## 13. Documentation index
+## 11. Client implementation pattern
 
-- Product and repository overview: `README.md`
-- Agent integration contract: `docs/api.md`
-- Deployment and operations: `docs/deployment.md`
-- Arc, vault, and CCTP details: `docs/arc.md`
-- Arc end-to-end guide: `docs/arc-testing-guide.md`
-- Pilot operations: `docs/testnet-pilot-operations.md`
-- OpenAPI: `apps/web/public/openapi.json`
-- Source implementation: `apps/web/src/`, `packages/shared/src/`, `contracts/`
+Every HTTP call should use a finite timeout, send `Accept: application/json`, send JSON content
+type for a body, and handle non-JSON responses without dumping raw HTML or authorization headers
+into logs. Preserve response headers such as `Retry-After`, `Location`, and `x-correlation-id`.
+
+Example pseudocode:
+
+```js
+async function treasuryRequest(path, init = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      authorization: `Bearer ${API_KEY}`,
+      accept: "application/json",
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...init.headers,
+    },
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+  const body = contentType.includes("application/json")
+    ? await response.json()
+    : { error: "non_json_response", message: `Unexpected HTTP ${response.status}` };
+
+  return { response, body };
+}
+```
+
+Do not assume every non-2xx response is safe to retry. Apply the status/error table above. Do not
+log the `authorization` header, full key, invoice secrets, or signed evidence.
+
+## 12. Agent safety and reporting rules
+
+- Never submit a payment unless it corresponds to a real user/owner-authorized intent.
+- Never guess a recipient, change a recipient, split a payment, reduce/raise an amount, or select a
+  different destination to get around a denial or cap.
+- Never claim that `202`, `approved`, `ready`, or a source-chain burn means the payee has received
+  funds. Require `execution_status: "executed"` and report transaction evidence.
+- Never submit the same intent with a new idempotency key because of a timeout, denial, or slow
+  poll.
+- Never treat `category` or `justification` as proof of merchant identity.
+- Never fabricate or alter invoices, URLs, evidence hashes, or signatures.
+- If the policy or API rejects a legitimate request, stop and ask the owner to update the policy
+  or fix the funding/setup. Do not retry with modified parameters to evade controls.
+- If uncertain whether a prior request was accepted, recover by the same idempotency key before
+  making another request.
+- In user-facing reports, state exact status, amount, recipient, destination if relevant, and
+  transaction hash only when execution is confirmed. If still pending, say pending and provide the
+  request ID. If denied, say denied and do not imply that funds moved.
+
+## 13. Authoritative references
+
+- Full agent API contract and evidence formats: [`docs/api.md`](docs/api.md)
+- API schema: [`apps/web/public/openapi.json`](apps/web/public/openapi.json)
+- TypeScript client example: [`docs/examples/agent-client.ts`](docs/examples/agent-client.ts)
+- Python client example: [`docs/examples/agent_client.py`](docs/examples/agent_client.py)
+- Payment integration collection: [`docs/treasury-copilot.postman_collection.json`](docs/treasury-copilot.postman_collection.json)
+- Current API routes: `apps/web/src/app/api/v1/`
